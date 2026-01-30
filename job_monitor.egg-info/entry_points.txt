@@ -1,0 +1,2 @@
+[console_scripts]
+job-monitor = job_monitor.cli:main
