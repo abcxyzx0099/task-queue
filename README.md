@@ -1,10 +1,10 @@
-# Job Monitor System
+# Task Monitor System
 
-Multi-project job monitoring daemon that watches project `jobs/items/` directories and executes jobs sequentially within each project (parallel across projects).
+Multi-project task monitoring daemon that watches project `tasks/pending/` directories and executes tasks sequentially within each project (parallel across projects).
 
 ## Installation Location
 
-`/home/admin/workspaces/job-monitor/` - User-local workspace installation (parallel to all projects)
+`/home/admin/workspaces/task-monitor/` - User-local workspace installation (parallel to all projects)
 
 ## Architecture
 
@@ -13,8 +13,8 @@ Multi-project job monitoring daemon that watches project `jobs/items/` directori
 ├── datachat/              # Project 1
 ├── agent-api/             # Project 2
 ├── other-project/         # Project 3
-└── job-monitor/           # ← Cross-project tool (shared by all projects)
-    ├── job_monitor/       # Python package
+└── task-monitor/           # ← Cross-project tool (shared by all projects)
+    ├── task_monitor/       # Python package
     ├── .venv/             # Virtual environment
     ├── pyproject.toml     # Package configuration
     └── monitor_daemon.py  # Main daemon
@@ -22,151 +22,171 @@ Multi-project job monitoring daemon that watches project `jobs/items/` directori
 
 ## Functionality
 
-The Job Monitor System provides:
+The Task Monitor System provides:
 
 - **Multi-project monitoring**: Watch multiple project directories simultaneously
-- **Automatic job detection**: Detects new job files matching `job-????????-??????-*.md`
-- **Sequential execution**: Jobs execute one at a time within each project
+- **Automatic task detection**: Detects new task files matching `task-????????-??????-*.md`
+- **Sequential execution**: Tasks execute one at a time within each project
 - **Parallel processing**: Different projects run independently
-- **Watchdog monitoring**: File system observers detect new jobs immediately
-- **Claude Agent SDK integration**: Executes jobs using task-coordination skill
+- **Watchdog monitoring**: File system observers detect new tasks immediately
+- **Claude Agent SDK integration**: Executes tasks using task-coordination skill
 - **Result tracking**: Saves execution results to JSON files
-- **Enhanced CLI**: Check job status by ID across all stages (waiting, processing, completed)
+- **Enhanced CLI**: Check task status by ID across all stages (waiting, processing, completed)
 
 ## Installation
 
 ### Quick Install
 
 ```bash
-cd /home/admin/workspaces/job-monitor
+cd /home/admin/workspaces/task-monitor
 
-# Install in editable mode (user-local)
-pip install --break-system-packages --user -e .
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Start the daemon
-nohup .venv/bin/python job_monitor/monitor_daemon.py > ~/job-monitor.log 2>&1 &
+# Install package in editable mode
+pip install -e .
+
+# Install dependencies
+pip install claude-agent-sdk watchdog
 ```
+
+### CLI Setup
+
+Add to `~/.bashrc`:
+
+```bash
+# Task Monitor CLI
+export PATH="$HOME/workspaces/task-monitor/.venv/bin:$PATH"
+```
+
+Then reload: `source ~/.bashrc`
 
 ### What Gets Installed
 
 | Component | Location |
 |-----------|----------|
-| **Source code** | `/home/admin/workspaces/job-monitor/job_monitor/` |
-| **CLI command** | `~/.local/bin/job-monitor` |
-| **Virtual environment** | `/home/admin/workspaces/job-monitor/.venv/` |
-| **Systemd service** | `~/.config/systemd/user/job-monitor.service` |
-| **Log file** | `~/job-monitor.log` |
+| **Source code** | `/home/admin/workspaces/task-monitor/task_monitor/` |
+| **CLI command** | `/home/admin/workspaces/task-monitor/.venv/bin/task-monitor` (via PATH) |
+| **Virtual environment** | `/home/admin/workspaces/task-monitor/.venv/` |
+| **Systemd service** | `~/.config/systemd/user/task-monitor.service` |
 
 ## Usage
 
-### 1. Creating Jobs
+### 1. Creating Tasks
 
-Create job files in your project's `jobs/items/` directory with the naming pattern:
+Create task files in your project's `tasks/pending/` directory with the naming pattern:
 
 ```
-job-YYYYMMDD-HHMMSS-<description>.md
+task-YYYYMMDD-HHMMSS-<description>.md
 ```
 
 Example:
 
 ```bash
-jobs/items/job-20260130-143000-fix-bug.md
-jobs/items/job-20260130-150000-analyze-data.md
+tasks/pending/task-20260130-143000-fix-bug.md
+tasks/pending/task-20260130-150000-analyze-data.md
 ```
 
-### 2. Job Execution Flow
+### 2. Task Execution Flow
 
 ```
-1. Create job file in jobs/items/
+1. Create task file in tasks/pending/
        ↓
 2. Watchdog detects new file
        ↓
-3. Job queued (in-memory FIFO queue)
+3. Task queued (in-memory FIFO queue)
        ↓
-4. Job executor runs /task-coordination
+4. Task executor runs /task-coordination
        ↓
-5. Worker + Auditor execute job
+5. Worker + Auditor execute task
        ↓
-6. Result saved to jobs/results/
+6. Result saved to tasks/results/
        ↓
-7. Next job processes automatically
+7. Next task processes automatically
 ```
 
 ## CLI Commands
 
-### job-monitor (Status Query)
+### task-monitor (Status Query)
 
 Check queue and execution status:
 
 ```bash
 # Show queue status
-job-monitor queue
+task-monitor queue
 
-# Show specific job status (by ID)
-job-monitor job-20260131-045746-test-new-cli-feature
+# Show specific task status (by ID)
+task-monitor task-20260131-045746-test-new-cli-feature
 
-# Show all completed jobs
-job-monitor status
+# Show all completed tasks
+task-monitor status
 ```
 
-**Job Status Output:**
+**Task Status Output:**
 
 | Status | Meaning | Shown Information |
 |--------|---------|-------------------|
-| **waiting** | Job is queued, not yet started | Created time, file size |
-| **processing** | Job is currently being executed | Job ID, start time |
-| **completed** | Job finished (success or failure) | Status, duration, summary, token usage |
-| **not_found** | Job doesn't exist in any stage | Lists checked locations |
+| **waiting** | Task is queued, not yet started | Created time, file size |
+| **processing** | Task is currently being executed | Task ID, start time |
+| **completed** | Task finished (success or failure) | Status, duration, summary, token usage |
+| **not_found** | Task doesn't exist in any stage | Lists checked locations |
 
-### Service Management
+## Service Management
+
+### Using Systemd Service (Recommended)
 
 ```bash
-# Check daemon status
+# Enable service (start on login)
+systemctl --user enable task-monitor
+
+# Start service
+systemctl --user start task-monitor
+
+# Check status
+systemctl --user status task-monitor
+
+# Restart service
+systemctl --user restart task-monitor
+
+# Stop service
+systemctl --user stop task-monitor
+
+# View logs
+journalctl --user -u task-monitor -f
+```
+
+### Manual Service Management
+
+```bash
+# Check if running
 ps aux | grep monitor_daemon
 
-# Start daemon
-nohup /home/admin/workspaces/job-monitor/.venv/bin/python /home/admin/workspaces/job-monitor/job_monitor/monitor_daemon.py > ~/job-monitor.log 2>&1 &
+# Start daemon manually
+nohup /home/admin/workspaces/task-monitor/.venv/bin/python -m task_monitor.monitor_daemon > ~/task-monitor.log 2>&1 &
 
 # Stop daemon
 pkill -f monitor_daemon
 
 # View logs
-tail -f ~/job-monitor.log
-```
-
-### Using Systemd Service (Optional)
-
-If you prefer systemd service management:
-
-```bash
-# Enable service
-systemctl --user enable job-monitor
-
-# Start service
-systemctl --user start job-monitor
-
-# Check status
-systemctl --user status job-monitor
-
-# View logs
-journalctl --user -u job-monitor -f
+tail -f ~/task-monitor.log
 ```
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `job_monitor/monitor_daemon.py` | Main daemon - manages observers and queue processors |
-| `job_monitor/job_executor.py` | Executes jobs using Claude Agent SDK |
-| `job_monitor/models.py` | Data models (JobResult, JobStatus) |
-| `job_monitor/cli.py` | Status query CLI source code |
+| `task_monitor/monitor_daemon.py` | Main daemon - manages observers and queue processors |
+| `task_monitor/task_executor.py` | Executes tasks using Claude Agent SDK |
+| `task_monitor/models.py` | Data models (TaskResult, TaskStatus) |
+| `task_monitor/cli.py` | Status query CLI source code |
 | `pyproject.toml` | Package configuration |
 
 ## Configuration
 
 ### Project Registry
 
-Location: `~/.config/job-monitor/registered.json`
+Location: `~/.config/task-monitor/registered.json`
 
 ```json
 {
@@ -184,7 +204,7 @@ Location: `~/.config/job-monitor/registered.json`
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MONITOR_SYSTEM_ROOT` | `/home/admin/workspaces/job-monitor` | System root directory |
+| `MONITOR_SYSTEM_ROOT` | `/home/admin/workspaces/task-monitor` | System root directory |
 
 ## Making Changes
 
@@ -192,46 +212,45 @@ Since the package is installed in **editable mode**, changes to source code take
 
 ```bash
 # Edit source
-vim /home/admin/workspaces/job-monitor/job_monitor/cli.py
+vim /home/admin/workspaces/task-monitor/task_monitor/cli.py
 
-# Restart daemon to apply changes
-pkill -f monitor_daemon
-nohup /home/admin/workspaces/job-monitor/.venv/bin/python /home/admin/workspaces/job-monitor/job_monitor/monitor_daemon.py > ~/job-monitor.log 2>&1 &
+# Restart service to apply changes
+systemctl --user restart task-monitor
 
 # Test CLI (changes apply immediately)
-job-monitor queue
+task-monitor queue
 ```
 
 ## Troubleshooting
 
-### Jobs not being detected
+### Tasks not being detected
 
-1. Verify job name matches pattern `job-????????-??????-*.md`
-2. Check daemon is running: `ps aux | grep monitor_daemon`
-3. Check observer started: `tail ~/job-monitor.log | grep "Observer started"`
-4. Verify project is registered: `cat ~/.config/job-monitor/registered.json`
+1. Verify task name matches pattern `task-????????-??????-*.md`
+2. Check daemon is running: `systemctl --user status task-monitor`
+3. Check observer started: `journalctl --user -u task-monitor | grep "Observer started"`
+4. Verify project is registered: `cat ~/.config/task-monitor/registered.json`
 
-### CLI shows "Job not found"
+### CLI shows "Task not found"
 
 The CLI checks in this order:
 1. **Currently processing** - from queue state
-2. **Waiting in queue** - from `jobs/items/` directory
-3. **Completed** - from `jobs/results/` directory
+2. **Waiting in queue** - from `tasks/pending/` directory
+3. **Completed** - from `tasks/results/` directory
 
-Use the job ID with or without `.md` extension:
+Use the task ID with or without `.md` extension:
 ```bash
-job-monitor job-20260131-045746-test-new-cli-feature
-job-monitor job-20260131-045746-test-new-cli-feature.md
+task-monitor task-20260131-045746-test-new-cli-feature
+task-monitor task-20260131-045746-test-new-cli-feature.md
 ```
 
-### Daemon won't start
+### Service won't start
 
 1. Check Python dependencies are installed:
    ```bash
-   /home/admin/workspaces/job-monitor/.venv/bin/pip list
+   /home/admin/workspaces/task-monitor/.venv/bin/pip list
    ```
-2. Check for missing modules in log: `cat ~/job-monitor.log`
-3. Reinstall dependencies:
+2. Check service logs: `journalctl --user -u task-monitor -n 50`
+3. Install missing dependencies:
    ```bash
-   /home/admin/workspaces/job-monitor/.venv/bin/pip install claude-agent-sdk watchdog
+   /home/admin/workspaces/task-monitor/.venv/bin/pip install claude-agent-sdk watchdog
    ```

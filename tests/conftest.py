@@ -1,4 +1,4 @@
-"""Test fixtures for job-monitor tests."""
+"""Test fixtures for task-monitor tests."""
 
 import pytest
 import tempfile
@@ -9,7 +9,7 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import json
 import asyncio
 
-from job_monitor.models import JobStatus, JobResult, QueueState, JobInfo
+from task_monitor.models import TaskStatus, TaskResult, QueueState, TaskInfo
 
 
 class AsyncIteratorMock:
@@ -40,29 +40,29 @@ def temp_dir():
 
 @pytest.fixture
 def project_root(temp_dir):
-    """Create a mock project root with job directories."""
-    jobs_dir = temp_dir / "jobs"
-    jobs_dir.mkdir()
+    """Create a mock project root with task directories."""
+    tasks_dir = temp_dir / "tasks"
+    tasks_dir.mkdir()
 
     # Create subdirectories
-    (jobs_dir / "items").mkdir()
-    (jobs_dir / "results").mkdir()
-    (jobs_dir / "state").mkdir()
+    (tasks_dir / "pending").mkdir()
+    (tasks_dir / "results").mkdir()
+    (tasks_dir / "state").mkdir()
 
     return temp_dir
 
 
 @pytest.fixture
-def sample_job_result():
-    """Create a sample JobResult for testing."""
-    return JobResult(
-        job_id="test-job-001",
-        status=JobStatus.COMPLETED,
+def sample_task_result():
+    """Create a sample TaskResult for testing."""
+    return TaskResult(
+        task_id="test-task-001",
+        status=TaskStatus.COMPLETED,
         created_at=datetime(2025, 1, 31, 10, 0, 0),
         started_at=datetime(2025, 1, 31, 10, 0, 5),
         completed_at=datetime(2025, 1, 31, 10, 0, 15),
         queue_position=1,
-        worker_output={"summary": "Test job completed successfully"},
+        worker_output={"summary": "Test task completed successfully"},
         audit_score=95,
         audit_notes="Excellent work",
         artifacts=["output.txt", "report.pdf"],
@@ -78,18 +78,18 @@ def sample_queue_state():
     """Create a sample QueueState for testing."""
     return QueueState(
         queue_size=3,
-        current_task="job-001.md",
+        current_task="task-001.md",
         is_processing=True,
-        queued_tasks=["job-002.md", "job-003.md", "job-004.md"],
+        queued_tasks=["task-002.md", "task-003.md", "task-004.md"],
     )
 
 
 @pytest.fixture
-def sample_job_info():
-    """Create a sample JobInfo for testing."""
-    return JobInfo(
-        job_id="test-job-001",
-        status=JobStatus.QUEUED,
+def sample_task_info():
+    """Create a sample TaskInfo for testing."""
+    return TaskInfo(
+        task_id="test-task-001",
+        status=TaskStatus.QUEUED,
         created_at=datetime(2025, 1, 31, 10, 0, 0),
         queue_position=1,
     )
@@ -101,7 +101,7 @@ def mock_query():
     # Create mock messages
     success_msg = Mock()
     success_msg.subtype = "success"
-    success_msg.result = "Job completed successfully"
+    success_msg.result = "Task completed successfully"
     success_msg.usage = {"total_tokens": 1000}
     success_msg.total_cost_usd = 0.05
 
@@ -114,19 +114,19 @@ def mock_query():
 
 
 @pytest.fixture
-def queued_job_file(project_root):
-    """Create a queued job file in the items directory."""
-    job_file = project_root / "jobs" / "items" / "queued-job.md"
-    job_file.write_text("# Test Job\n\nThis is a test job.")
-    return job_file
+def queued_task_file(project_root):
+    """Create a queued task file in the pending directory."""
+    task_file = project_root / "tasks" / "pending" / "queued-task.md"
+    task_file.write_text("# Test Job\n\nThis is a test task.")
+    return task_file
 
 
 @pytest.fixture
-def completed_job_result(project_root):
-    """Create a completed job result file."""
-    result_file = project_root / "jobs" / "results" / "completed-job.json"
+def completed_task_result(project_root):
+    """Create a completed task result file."""
+    result_file = project_root / "tasks" / "results" / "completed-task.json"
     result_data = {
-        "job_id": "completed-job",
+        "task_id": "completed-task",
         "status": "completed",
         "created_at": "2025-01-31T10:00:00",
         "started_at": "2025-01-31T10:00:05",
@@ -134,7 +134,7 @@ def completed_job_result(project_root):
         "duration_seconds": 10.5,
         "stdout": "Job output",
         "worker_output": {
-            "summary": "Job completed",
+            "summary": "Task completed",
             "usage": {"total_tokens": 1000, "cost_usd": 0.05}
         }
     }
@@ -145,13 +145,13 @@ def completed_job_result(project_root):
 @pytest.fixture
 def queue_state_file(project_root):
     """Create a queue state file."""
-    state_file = project_root / "jobs" / "state" / "queue_state.json"
+    state_file = project_root / "tasks" / "state" / "queue_state.json"
     state_data = {
         "queue_size": 2,
-        "current_task": "current-job.md",
+        "current_task": "current-task.md",
         "is_processing": True,
         "task_start_time": "2025-01-31T10:00:00",
-        "queued_tasks": ["queued-job.md", "pending-job.md"]
+        "queued_tasks": ["queued-task.md", "pending-task.md"]
     }
     state_file.write_text(json.dumps(state_data))
     return state_file

@@ -1,16 +1,17 @@
 import asyncio
 import sys
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime
 from claude_agent_sdk import query, ClaudeAgentOptions
 
 # Add paths for module imports
 PROJECT_ROOT = Path("/home/admin/workspaces/datachat")
-MONITOR_SYSTEM_ROOT = Path("/home/admin/workspaces/job-monitor")
+MONITOR_SYSTEM_ROOT = Path("/home/admin/workspaces/task-monitor")
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(MONITOR_SYSTEM_ROOT))
-from job_monitor.models import JobResult, JobStatus
+from task_monitor.models import TaskResult, TaskStatus
 
 # Configure logging to systemd journal (standard for Linux services)
 logging.basicConfig(
@@ -20,25 +21,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class JobExecutor:
-    """Executes jobs using Claude Agent SDK - directly invokes skills."""
+class TaskExecutor:
+    """Executes tasks using Claude Agent SDK - directly invokes skills."""
 
     def __init__(self, tasks_dir: str, results_dir: str, project_root: str = "."):
         self.tasks_dir = Path(tasks_dir)
         self.results_dir = Path(results_dir)
         self.project_root = Path(project_root).resolve()
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.project_root / 'tasks' / 'archive'
+        self.archive_dir.mkdir(parents=True, exist_ok=True)
 
-    async def execute_job(self, job_file: str) -> JobResult:
-        """Execute a job by directly invoking task-coordination skill."""
-        job_id = Path(job_file).stem
-        job_path = self.tasks_dir / job_file
+    async def execute_task(self, task_file: str) -> TaskResult:
+        """Execute a task by directly invoking task-coordination skill."""
+        task_id = Path(task_file).stem
+        task_path = self.tasks_dir / task_file
 
-        # Read job document content
-        job_content = self._read_job_document(job_path)
+        # Read task document content
+        task_content = self._read_task_document(task_path)
 
-        # Log job start to systemd journal
-        logger.info(f"[{job_id}] Job started")
+        # Log task start to systemd journal
+        logger.info(f"[{task_id}] Task started")
 
         # Configure SDK
         options = ClaudeAgentOptions(
@@ -48,15 +51,15 @@ class JobExecutor:
         )
 
         start_time = datetime.now()
-        result = JobResult(
-            job_id=job_id,
-            status=JobStatus.RUNNING,
+        result = TaskResult(
+            task_id=task_id,
+            status=TaskStatus.RUNNING,
             created_at=start_time,
             started_at=start_time,
         )
 
         # Track if we've received final result (to avoid break)
-        job_complete = False
+        task_complete = False
         full_output = []
 
         try:
@@ -64,47 +67,47 @@ class JobExecutor:
             q = query(
                 prompt=f"""/task-coordination
 
-Execute the following job:
+Execute the following task:
 
-{job_content}
+{task_content}
 """,
                 options=options
             )
 
             # Iterate through messages - DO NOT use break, consume all messages naturally
             async for message in q:
-                # Skip processing if job is already complete
-                if job_complete:
+                # Skip processing if task is already complete
+                if task_complete:
                     continue
 
                 if hasattr(message, 'subtype'):
                     if message.subtype == 'success':
-                        result.status = JobStatus.COMPLETED
+                        result.status = TaskStatus.COMPLETED
                         result.completed_at = datetime.now()
                         result.duration_seconds = (result.completed_at - start_time).total_seconds()
                         result.stdout = "\n".join(full_output) if full_output else ""
                         result.worker_output = {
-                            "summary": message.result or "Job completed",
+                            "summary": message.result or "Task completed",
                             "raw_output": result.stdout
                         }
                         if hasattr(message, 'usage'):
                             result.worker_output['usage'] = message.usage
                         if hasattr(message, 'total_cost_usd'):
                             result.worker_output['cost_usd'] = message.total_cost_usd
-                        logger.info(f"[{job_id}] Job completed in {result.duration_seconds:.1f}s")
+                        logger.info(f"[{task_id}] Task completed in {result.duration_seconds:.1f}s")
                         # Mark complete but don't break - consume remaining messages naturally
-                        job_complete = True
+                        task_complete = True
 
                     elif message.subtype == 'error':
-                        result.status = JobStatus.FAILED
+                        result.status = TaskStatus.FAILED
                         result.completed_at = datetime.now()
                         result.duration_seconds = (result.completed_at - start_time).total_seconds()
                         result.stdout = "\n".join(full_output) if full_output else ""
-                        result.stderr = message.result or "Job failed"
+                        result.stderr = message.result or "Task failed"
                         result.error = result.stderr
-                        logger.error(f"[{job_id}] Job failed: {result.error}")
+                        logger.error(f"[{task_id}] Task failed: {result.error}")
                         # Mark complete but don't break - consume remaining messages naturally
-                        job_complete = True
+                        task_complete = True
                 else:
                     # Collect output from other message types
                     if hasattr(message, 'content'):
@@ -114,40 +117,57 @@ Execute the following job:
 
             # Save result after consuming all messages naturally
             self._save_result(result)
+            # Archive task document
+            self._archive_task(task_file)
 
         except asyncio.CancelledError:
-            # Handle job cancellation gracefully
-            logger.info(f"[{job_id}] Job cancelled")
-            if not job_complete:
-                result.status = JobStatus.FAILED
+            # Handle task cancellation gracefully
+            logger.info(f"[{task_id}] Task cancelled")
+            if not task_complete:
+                result.status = TaskStatus.FAILED
                 result.completed_at = datetime.now()
                 result.duration_seconds = (result.completed_at - start_time).total_seconds()
-                result.error = "Job cancelled"
+                result.error = "Task cancelled"
                 self._save_result(result)
+                self._archive_task(task_file)
             # Re-raise to allow proper cleanup
             raise
 
         except Exception as e:
-            if not job_complete:
-                result.status = JobStatus.FAILED
+            if not task_complete:
+                result.status = TaskStatus.FAILED
                 result.completed_at = datetime.now()
                 result.duration_seconds = (result.completed_at - start_time).total_seconds()
                 result.error = f"{type(e).__name__}: {str(e)}"
-                logger.error(f"[{job_id}] Job exception: {result.error}")
+                logger.error(f"[{task_id}] Task exception: {result.error}")
                 self._save_result(result)
+                self._archive_task(task_file)
 
         return result
 
-    def _read_job_document(self, job_path: Path) -> str:
-        """Read job document content."""
+    def _read_task_document(self, task_path: Path) -> str:
+        """Read task document content."""
         try:
-            with open(job_path, 'r') as f:
+            with open(task_path, 'r') as f:
                 return f.read()
         except FileNotFoundError:
-            raise FileNotFoundError(f"Job document not found: {job_path}")
+            raise FileNotFoundError(f"Task document not found: {task_path}")
 
-    def _save_result(self, result: JobResult):
+    def _save_result(self, result: TaskResult):
         """Save result to JSON file."""
-        output_file = self.results_dir / f"{result.job_id}.json"
+        output_file = self.results_dir / f"{result.task_id}.json"
         with open(output_file, "w") as f:
             f.write(result.model_dump_json(indent=2))
+
+    def _archive_task(self, task_file: str):
+        """Move completed task document to archive."""
+        # Only archive .md files
+        if not task_file.endswith('.md'):
+            return
+
+        # Move task document to archive (flat structure)
+        src_path = self.tasks_dir / task_file
+        if src_path.exists():
+            dest_path = self.archive_dir / task_file
+            shutil.move(str(src_path), str(dest_path))
+            logging.info(f"Archived task document: {task_file}")

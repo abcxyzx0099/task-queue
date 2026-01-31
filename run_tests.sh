@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test runner script for job-monitor
+# Test runner script for task-monitor
 
 set -e
 
@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo -e "${YELLOW}Running job-monitor test suite...${NC}\n"
+echo -e "${YELLOW}Running task-monitor test suite...${NC}\n"
 
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then

@@ -1,42 +1,42 @@
-"""Tests for job_monitor.models module."""
+"""Tests for task_monitor.models module."""
 
 import pytest
 from datetime import datetime
 from pydantic import ValidationError
 
-from job_monitor.models import JobStatus, JobResult, QueueState, JobInfo
+from task_monitor.models import TaskStatus, TaskResult, QueueState, TaskInfo
 
 
-class TestJobStatus:
-    """Tests for JobStatus enum."""
+class TestTaskStatus:
+    """Tests for TaskStatus enum."""
 
     def test_job_status_values(self):
-        """Test JobStatus enum has correct values."""
-        assert JobStatus.QUEUED == "queued"
-        assert JobStatus.RUNNING == "running"
-        assert JobStatus.COMPLETED == "completed"
-        assert JobStatus.FAILED == "failed"
-        assert JobStatus.RETRYING == "retrying"
+        """Test TaskStatus enum has correct values."""
+        assert TaskStatus.QUEUED == "queued"
+        assert TaskStatus.RUNNING == "running"
+        assert TaskStatus.COMPLETED == "completed"
+        assert TaskStatus.FAILED == "failed"
+        assert TaskStatus.RETRYING == "retrying"
 
     def test_job_status_comparison(self):
-        """Test JobStatus comparison works."""
-        status = JobStatus.COMPLETED
+        """Test TaskStatus comparison works."""
+        status = TaskStatus.COMPLETED
         assert status == "completed"
         assert status != "failed"
 
 
-class TestJobResult:
-    """Tests for JobResult model."""
+class TestTaskResult:
+    """Tests for TaskResult model."""
 
     def test_job_result_creation_minimal(self):
-        """Test JobResult creation with minimal required fields."""
-        result = JobResult(
-            job_id="test-001",
-            status=JobStatus.COMPLETED,
+        """Test TaskResult creation with minimal required fields."""
+        result = TaskResult(
+            task_id="test-001",
+            status=TaskStatus.COMPLETED,
             created_at=datetime.now(),
         )
-        assert result.job_id == "test-001"
-        assert result.status == JobStatus.COMPLETED
+        assert result.task_id == "test-001"
+        assert result.status == TaskStatus.COMPLETED
         assert result.started_at is None
         assert result.completed_at is None
         assert result.queue_position is None
@@ -51,14 +51,14 @@ class TestJobResult:
         assert result.duration_seconds is None
 
     def test_job_result_creation_full(self):
-        """Test JobResult creation with all fields."""
+        """Test TaskResult creation with all fields."""
         created_at = datetime(2025, 1, 31, 10, 0, 0)
         started_at = datetime(2025, 1, 31, 10, 0, 5)
         completed_at = datetime(2025, 1, 31, 10, 0, 15)
 
-        result = JobResult(
-            job_id="test-002",
-            status=JobStatus.COMPLETED,
+        result = TaskResult(
+            task_id="test-002",
+            status=TaskStatus.COMPLETED,
             created_at=created_at,
             started_at=started_at,
             completed_at=completed_at,
@@ -73,8 +73,8 @@ class TestJobResult:
             stderr="Errors here",
             duration_seconds=10.5,
         )
-        assert result.job_id == "test-002"
-        assert result.status == JobStatus.COMPLETED
+        assert result.task_id == "test-002"
+        assert result.status == TaskStatus.COMPLETED
         assert result.created_at == created_at
         assert result.started_at == started_at
         assert result.completed_at == completed_at
@@ -90,10 +90,10 @@ class TestJobResult:
         assert result.duration_seconds == 10.5
 
     def test_job_result_serialization(self):
-        """Test JobResult can be serialized to JSON."""
-        result = JobResult(
-            job_id="test-003",
-            status=JobStatus.FAILED,
+        """Test TaskResult can be serialized to JSON."""
+        result = TaskResult(
+            task_id="test-003",
+            status=TaskStatus.FAILED,
             created_at=datetime(2025, 1, 31, 10, 0, 0),
             error="Something went wrong",
             retry_count=2,
@@ -104,17 +104,17 @@ class TestJobResult:
         assert "Something went wrong" in json_str
 
     def test_job_result_deserialization(self):
-        """Test JobResult can be deserialized from JSON."""
+        """Test TaskResult can be deserialized from JSON."""
         json_data = {
-            "job_id": "test-004",
+            "task_id": "test-004",
             "status": "completed",
             "created_at": "2025-01-31T10:00:00",
             "retry_count": 0,
             "artifacts": [],
         }
-        result = JobResult(**json_data)
-        assert result.job_id == "test-004"
-        assert result.status == JobStatus.COMPLETED
+        result = TaskResult(**json_data)
+        assert result.task_id == "test-004"
+        assert result.status == TaskStatus.COMPLETED
 
 
 class TestQueueState:
@@ -124,12 +124,12 @@ class TestQueueState:
         """Test QueueState creation."""
         state = QueueState(
             queue_size=5,
-            current_task="job-001.md",
+            current_task="task-001.md",
             is_processing=True,
-            queued_tasks=["job-002.md", "job-003.md", "job-004.md", "job-005.md"],
+            queued_tasks=["task-002.md", "task-003.md", "task-004.md", "task-005.md"],
         )
         assert state.queue_size == 5
-        assert state.current_task == "job-001.md"
+        assert state.current_task == "task-001.md"
         assert state.is_processing is True
         assert len(state.queued_tasks) == 4
 
@@ -147,28 +147,28 @@ class TestQueueState:
         assert state.queued_tasks == []
 
 
-class TestJobInfo:
-    """Tests for JobInfo model."""
+class TestTaskInfo:
+    """Tests for TaskInfo model."""
 
     def test_job_info_creation(self):
-        """Test JobInfo creation."""
-        info = JobInfo(
-            job_id="info-001",
-            status=JobStatus.QUEUED,
+        """Test TaskInfo creation."""
+        info = TaskInfo(
+            task_id="info-001",
+            status=TaskStatus.QUEUED,
             created_at=datetime.now(),
             queue_position=3,
         )
-        assert info.job_id == "info-001"
-        assert info.status == JobStatus.QUEUED
+        assert info.task_id == "info-001"
+        assert info.status == TaskStatus.QUEUED
         assert info.queue_position == 3
 
     def test_job_info_without_queue_position(self):
-        """Test JobInfo without queue position."""
-        info = JobInfo(
-            job_id="info-002",
-            status=JobStatus.RUNNING,
+        """Test TaskInfo without queue position."""
+        info = TaskInfo(
+            task_id="info-002",
+            status=TaskStatus.RUNNING,
             created_at=datetime.now(),
         )
-        assert info.job_id == "info-002"
-        assert info.status == JobStatus.RUNNING
+        assert info.task_id == "info-002"
+        assert info.status == TaskStatus.RUNNING
         assert info.queue_position is None

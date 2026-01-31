@@ -1,0 +1,2 @@
+[console_scripts]
+task-monitor = task_monitor.cli:main

@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
-Name: job-monitor
+Name: task-monitor
 Version: 1.0.0
-Summary: Multi-project job monitoring system with Claude Agent SDK integration
+Summary: Multi-project task monitoring system with Claude Agent SDK integration
 Requires-Python: >=3.10
 Requires-Dist: watchdog>=5.0.0
 Requires-Dist: pydantic>=2.0.0

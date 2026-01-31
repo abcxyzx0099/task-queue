@@ -1,7 +1,7 @@
 [project]
-name = "job-monitor"
+name = "task-monitor"
 version = "1.0.0"
-description = "Multi-project job monitoring system with Claude Agent SDK integration"
+description = "Multi-project task monitoring system with Claude Agent SDK integration"
 requires-python = ">=3.10"
 dependencies = [
     "watchdog>=5.0.0",
@@ -16,7 +16,7 @@ dev = [
 ]
 
 [project.scripts]
-job-monitor = "job_monitor.cli:main"
+task-monitor = "task_monitor.cli:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

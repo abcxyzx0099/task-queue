@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 
 
-class JobStatus(str, Enum):
+class TaskStatus(str, Enum):
     QUEUED = "queued"       # Waiting in queue
     RUNNING = "running"     # Currently executing
     COMPLETED = "completed" # Successfully completed
@@ -12,9 +12,9 @@ class JobStatus(str, Enum):
     RETRYING = "retrying"   # Being retried
 
 
-class JobResult(BaseModel):
-    job_id: str
-    status: JobStatus
+class TaskResult(BaseModel):
+    task_id: str
+    status: TaskStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -25,23 +25,23 @@ class JobResult(BaseModel):
     artifacts: List[str] = []
     error: Optional[str] = None
     retry_count: int = 0
-    # Job execution logs
-    stdout: Optional[str] = None       # Captured stdout from job execution
-    stderr: Optional[str] = None       # Captured stderr from job execution
+    # Task execution logs
+    stdout: Optional[str] = None       # Captured stdout from task execution
+    stderr: Optional[str] = None       # Captured stderr from task execution
     duration_seconds: Optional[float] = None  # Execution duration
 
 
 class QueueState(BaseModel):
-    """Current state of the job queue."""
+    """Current state of the task queue."""
     queue_size: int
     current_task: Optional[str]
     is_processing: bool
     queued_tasks: List[str]
 
 
-class JobInfo(BaseModel):
-    """Basic job info for status queries."""
-    job_id: str
-    status: JobStatus
+class TaskInfo(BaseModel):
+    """Basic task info for status queries."""
+    task_id: str
+    status: TaskStatus
     created_at: datetime
     queue_position: Optional[int] = None

@@ -1,1 +1,1 @@
-"""Test suite for job-monitor."""
+"""Test suite for task-monitor."""
