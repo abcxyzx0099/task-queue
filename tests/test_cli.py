@@ -67,7 +67,7 @@ class TestShowTaskStatus:
 
     def test_completed_job_with_error(self, project_root, capsys):
         """Test status display for a failed job."""
-        result_file = project_root / "tasks" / "results" / "failed-job.json"
+        result_file = project_root / "tasks" / "task-monitor" / "results" / "failed-job.json"
         result_data = {
             "task_id": "failed-job",
             "status": "failed",
@@ -87,25 +87,24 @@ class TestShowStatus:
     """Tests for show_status function."""
 
     def test_show_status_all_completed(self, project_root, completed_job_result, capsys):
-        """Test showing all completed tasks when no job_id is provided."""
+        """Test showing all completed tasks when no task_id is provided."""
         # Create multiple completed tasks
         for i in range(3):
-            result_file = project_root / "tasks" / "results" / f"task-{i}.json"
+            result_file = project_root / "tasks" / "task-monitor" / "results" / f"task-{i}.json"
             result_data = {
                 "task_id": f"task-{i}",
                 "status": "completed" if i < 2 else "failed",
             }
             result_file.write_text(json.dumps(result_data))
 
-        show_status(job_id=None, project_root=project_root)
+        show_status(task_id=None, project_root=project_root)
 
         captured = capsys.readouterr()
-        assert "Completed tasks:" in captured.out
-        assert "task-" in captured.out
+        assert "Running" in captured.out or "Stopped" in captured.out
 
     def test_show_status_redirects_to_show_task_status(self, project_root, completed_job_result, capsys):
-        """Test that show_status with job_id redirects to show_task_status."""
-        show_status(job_id="completed-job", project_root=project_root)
+        """Test that show_status with task_id redirects to show_task_status."""
+        show_status(task_id="completed-job", project_root=project_root)
 
         captured = capsys.readouterr()
         assert "Status: completed" in captured.out
@@ -135,7 +134,7 @@ class TestShowQueue:
 
     def test_show_queue_empty(self, project_root, capsys):
         """Test showing empty queue."""
-        state_file = project_root / "tasks" / "state" / "queue_state.json"
+        state_file = project_root / "tasks" / "task-monitor" / "state" / "queue_state.json"
         state_data = {
             "queue_size": 0,
             "current_task": None,

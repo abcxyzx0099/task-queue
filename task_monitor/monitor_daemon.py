@@ -241,50 +241,39 @@ class MultiProjectMonitor:
         logger.info(f"Queue processor started for '{name}'")
 
         try:
-            while self.running:
+            while True:
+                # Wait for next task (blocks indefinitely, zero CPU when idle)
+                task_file = await queue.get_next()
+
+                # Poison pill: None signals graceful shutdown
+                if task_file is None:
+                    logger.info(f"[{name}] Received shutdown signal")
+                    break
+
+                logger.info(f"[{name}] Starting task: {task_file}")
+                queue.is_processing = True
+                queue.current_task = task_file
+                queue._save_state()
+
+                # Execute task
                 try:
-                    # Wait for next task
-                    task_file = await asyncio.wait_for(
-                        queue.get_next(),
-                        timeout=1.0
+                    result = await executor.execute_task(task_file)
+                    if result.completed_at:
+                        duration = (result.completed_at - result.started_at).total_seconds()
+                    else:
+                        duration = 0
+                    logger.info(
+                        f"[{name}] Task completed: {task_file} - "
+                        f"status={result.status}, "
+                        f"duration={duration:.1f}s"
                     )
-
-                    logger.info(f"[{name}] Starting task: {task_file}")
-                    queue.is_processing = True
-                    queue.current_task = task_file
-                    queue._save_state()
-
-                    # Execute task
-                    try:
-                        result = await executor.execute_task(task_file)
-                        if result.completed_at:
-                            duration = (result.completed_at - result.started_at).total_seconds()
-                        else:
-                            duration = 0
-                        logger.info(
-                            f"[{name}] Task completed: {task_file} - "
-                            f"status={result.status}, "
-                            f"duration={duration:.1f}s"
-                        )
-                    except Exception as e:
-                        logger.error(f"[{name}] Task failed: {task_file} - {e}")
-
-                    # Mark as ready for next task
-                    queue.current_task = None
-                    queue.is_processing = False
-                    queue._save_state()
-
-                    # Small delay before next task
-                    await asyncio.sleep(0.5)
-
-                except asyncio.TimeoutError:
-                    # No task in queue, continue waiting
-                    continue
                 except Exception as e:
-                    logger.error(f"[{name}] Error processing task: {e}")
-                    queue.current_task = None
-                    queue.is_processing = False
-                    queue._save_state()
+                    logger.error(f"[{name}] Task failed: {task_file} - {e}")
+
+                # Mark as ready for next task
+                queue.current_task = None
+                queue.is_processing = False
+                queue._save_state()
 
         except asyncio.CancelledError:
             # Handle cancellation gracefully (normal shutdown)
@@ -301,7 +290,12 @@ class MultiProjectMonitor:
         logging.info("Stopping monitor...")
         self.running = False
 
-        # Cancel all processor tasks first
+        # Send poison pills to all queues to signal graceful shutdown
+        for name, project in self.projects.items():
+            asyncio.create_task(project["queue"].put(None))
+            logging.info(f"[{name}] Sent shutdown signal to queue")
+
+        # Cancel all processor tasks
         for task in self.processor_tasks:
             if not task.done():
                 task.cancel()

@@ -41,13 +41,14 @@ def temp_dir():
 @pytest.fixture
 def project_root(temp_dir):
     """Create a mock project root with task directories."""
-    tasks_dir = temp_dir / "tasks"
-    tasks_dir.mkdir()
+    task_monitor_dir = temp_dir / "tasks" / "task-monitor"
+    task_monitor_dir.mkdir(parents=True)
 
     # Create subdirectories
-    (tasks_dir / "pending").mkdir()
-    (tasks_dir / "results").mkdir()
-    (tasks_dir / "state").mkdir()
+    (task_monitor_dir / "pending").mkdir()
+    (task_monitor_dir / "results").mkdir()
+    (task_monitor_dir / "state").mkdir()
+    (task_monitor_dir / "archive").mkdir()
 
     return temp_dir
 
@@ -116,15 +117,23 @@ def mock_query():
 @pytest.fixture
 def queued_task_file(project_root):
     """Create a queued task file in the pending directory."""
-    task_file = project_root / "tasks" / "pending" / "queued-task.md"
+    task_file = project_root / "tasks" / "task-monitor" / "pending" / "queued-task.md"
     task_file.write_text("# Test Job\n\nThis is a test task.")
+    return task_file
+
+
+@pytest.fixture
+def queued_job_file(project_root):
+    """Create a queued job file in the pending directory (alias for queued_task_file)."""
+    task_file = project_root / "tasks" / "task-monitor" / "pending" / "queued-job.md"
+    task_file.write_text("# Test Queued Job\n\nThis is a test queued task.")
     return task_file
 
 
 @pytest.fixture
 def completed_task_result(project_root):
     """Create a completed task result file."""
-    result_file = project_root / "tasks" / "results" / "completed-task.json"
+    result_file = project_root / "tasks" / "task-monitor" / "results" / "completed-task.json"
     result_data = {
         "task_id": "completed-task",
         "status": "completed",
@@ -143,15 +152,49 @@ def completed_task_result(project_root):
 
 
 @pytest.fixture
-def queue_state_file(project_root):
+def completed_job_result(project_root):
+    """Create a completed job result file (alias for completed_task_result)."""
+    result_file = project_root / "tasks" / "task-monitor" / "results" / "completed-job.json"
+    result_data = {
+        "task_id": "completed-job",
+        "status": "completed",
+        "created_at": "2025-01-31T10:00:00",
+        "started_at": "2025-01-31T10:00:05",
+        "completed_at": "2025-01-31T10:00:15",
+        "duration_seconds": 10.5,
+        "stdout": "Job output",
+        "worker_output": {
+            "summary": "Task completed",
+            "usage": {"total_tokens": 1000, "cost_usd": 0.05}
+        }
+    }
+    result_file.write_text(json.dumps(result_data))
+    return result_file
+
+
+@pytest.fixture
+def current_job_file(project_root):
+    """Create a current job file for testing processing status."""
+    task_file = project_root / "tasks" / "task-monitor" / "pending" / "current-job.md"
+    task_file.write_text("# Current Job\n\nThis is a currently processing task.")
+    return task_file
+
+
+@pytest.fixture
+def queue_state_file(project_root, current_job_file):
     """Create a queue state file."""
-    state_file = project_root / "tasks" / "state" / "queue_state.json"
+    # Create pending-job.md for queued tasks
+    pending_job = project_root / "tasks" / "task-monitor" / "pending" / "pending-job.md"
+    pending_job.write_text("# Pending Job\n\nThis is a pending task.")
+
+    state_file = project_root / "tasks" / "task-monitor" / "state" / "queue_state.json"
     state_data = {
+        "project": "test-project",
         "queue_size": 2,
-        "current_task": "current-task.md",
+        "current_task": "current-job.md",
         "is_processing": True,
         "task_start_time": "2025-01-31T10:00:00",
-        "queued_tasks": ["queued-task.md", "pending-task.md"]
+        "queued_tasks": ["queued-job.md", "pending-job.md"]
     }
     state_file.write_text(json.dumps(state_data))
     return state_file

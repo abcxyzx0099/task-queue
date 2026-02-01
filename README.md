@@ -32,6 +32,7 @@ The Task Monitor System provides:
 - **Claude Agent SDK integration**: Executes tasks using task-coordination skill
 - **Result tracking**: Saves execution results to JSON files
 - **Enhanced CLI**: Check task status by ID across all stages (waiting, processing, completed)
+- **Single instance enforcement**: File-based lock prevents multiple instances from running simultaneously
 
 ## Installation
 
@@ -132,6 +133,25 @@ task-monitor status
 | **completed** | Task finished (success or failure) | Status, duration, summary, token usage |
 | **not_found** | Task doesn't exist in any stage | Lists checked locations |
 
+## Process Management
+
+### Single Instance Protection
+
+The task-monitor service uses **file-based locking** to prevent multiple instances from running simultaneously. This prevents race conditions and duplicate task execution.
+
+**Lock file location:** `~/.config/task-monitor/task-monitor.lock`
+
+When you try to start a second instance while one is already running:
+```bash
+$ python -m task_monitor.monitor_daemon
+Starting Multi-Project Task Monitor
+Another instance is already running (lock file: /home/admin/.config/task-monitor/task-monitor.lock). Exiting.
+```
+
+The lock is automatically released when the service stops.
+
+---
+
 ## Service Management
 
 ### Using Systemd Service (Recommended)
@@ -162,25 +182,30 @@ journalctl --user -u task-monitor -f
 # Check if running
 ps aux | grep monitor_daemon
 
-# Start daemon manually
-nohup /home/admin/workspaces/task-monitor/.venv/bin/python -m task_monitor.monitor_daemon > ~/task-monitor.log 2>&1 &
+# Check lock file status
+ls -la ~/.config/task-monitor/task-monitor.lock
+
+# Start daemon manually (will exit if already running)
+/home/admin/workspaces/task-monitor/.venv/bin/python -m task_monitor.monitor_daemon
 
 # Stop daemon
 pkill -f monitor_daemon
 
 # View logs
-tail -f ~/task-monitor.log
+journalctl --user -u task-monitor -f
 ```
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `task_monitor/monitor_daemon.py` | Main daemon - manages observers and queue processors |
+| `task_monitor/monitor_daemon.py` | Main daemon - manages observers and queue processors with instance lock protection |
 | `task_monitor/task_executor.py` | Executes tasks using Claude Agent SDK |
 | `task_monitor/models.py` | Data models (TaskResult, TaskStatus) |
 | `task_monitor/cli.py` | Status query CLI source code |
 | `pyproject.toml` | Package configuration |
+| `~/.config/systemd/user/task-monitor.service` | Systemd service unit (includes PIDFile directive) |
+| `~/.config/task-monitor/task-monitor.lock` | Instance lock file (prevents multiple instances) |
 
 ## Configuration
 
@@ -199,6 +224,12 @@ Location: `~/.config/task-monitor/registered.json`
   }
 }
 ```
+
+### Lock File
+
+| File | Purpose |
+|------|---------|
+| `~/.config/task-monitor/task-monitor.lock` | Prevents multiple instances from running (uses fcntl file locking) |
 
 ### Environment Variables
 
@@ -222,6 +253,13 @@ task-monitor queue
 ```
 
 ## Troubleshooting
+
+### Multiple instances won't start (expected behavior)
+
+If you see "Another instance is already running" when starting the service:
+- This is **normal** - the lock prevents duplicate instances
+- Check if service is already running: `systemctl --user status task-monitor`
+- If you believe it's a stale lock, remove it manually: `rm ~/.config/task-monitor/task-monitor.lock`
 
 ### Tasks not being detected
 
