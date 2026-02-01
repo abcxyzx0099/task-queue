@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from io import StringIO
@@ -12,9 +13,10 @@ from task_monitor.cli import (
     show_task_status,
     show_status,
     show_queue,
+    load_pending_tasks,
     use_project,
     get_current_project,
-    CONFIG_FILE,
+    ENV_VAR_NAME,
 )
 
 
@@ -156,23 +158,22 @@ class TestShowQueue:
 class TestProjectManagement:
     """Tests for project management commands (use, current)."""
 
-    def test_use_project_sets_config(self, project_root, monkeypatch, tmp_path):
-        """Test that use_project creates config file with correct path."""
-        # Mock CONFIG_FILE to use temp directory
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr("task_monitor.cli.CONFIG_FILE", temp_config)
+    def test_use_project_updates_env_file(self, project_root, monkeypatch, tmp_path):
+        """Test that use_project updates .env file."""
+        # Mock ENV_FILE to use temp directory
+        temp_env = tmp_path / ".env"
+        monkeypatch.setattr("task_monitor.cli.ENV_FILE", temp_env)
 
         use_project(str(project_root))
 
-        # Verify config was created
-        assert temp_config.exists()
-        config = json.loads(temp_config.read_text())
-        assert config["current_project"] == str(project_root)
+        # Verify .env file was created/updated
+        content = temp_env.read_text()
+        assert f'{ENV_VAR_NAME}="{project_root}"' in content
 
     def test_use_project_validates_path_exists(self, monkeypatch, tmp_path, capsys):
         """Test that use_project validates path exists."""
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr("task_monitor.cli.CONFIG_FILE", temp_config)
+        temp_env = tmp_path / ".env"
+        monkeypatch.setattr("task_monitor.cli.ENV_FILE", temp_env)
 
         # Use non-existent path
         result = use_project("/nonexistent/path")
@@ -181,21 +182,16 @@ class TestProjectManagement:
         captured = capsys.readouterr()
         assert "does not exist" in captured.out
 
-    def test_get_current_project_from_config(self, project_root, monkeypatch, tmp_path):
-        """Test that get_current_project reads from config."""
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr("task_monitor.cli.CONFIG_FILE", temp_config)
-
-        # Create config
-        temp_config.write_text(json.dumps({"current_project": str(project_root)}))
+    def test_get_current_project_from_env(self, project_root, monkeypatch):
+        """Test that get_current_project reads from environment variable."""
+        monkeypatch.setenv(ENV_VAR_NAME, str(project_root))
 
         result = get_current_project()
         assert result == project_root
 
-    def test_get_current_project_returns_none_when_no_config(self, monkeypatch, tmp_path):
-        """Test that get_current_project returns None when config doesn't exist."""
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr("task_monitor.cli.CONFIG_FILE", temp_config)
+    def test_get_current_project_returns_none_when_not_set(self, monkeypatch):
+        """Test that get_current_project returns None when env var is not set."""
+        monkeypatch.delenv(ENV_VAR_NAME, raising=False)
 
         result = get_current_project()
         assert result is None
@@ -204,14 +200,10 @@ class TestProjectManagement:
 class TestMain:
     """Tests for main CLI entry point."""
 
-    def test_main_queue_command(self, project_root, queue_state_file, monkeypatch, capsys, tmp_path):
+    def test_main_queue_command(self, project_root, queue_state_file, monkeypatch, capsys):
         """Test main function with queue command."""
-        import task_monitor.cli
-
-        # Mock CONFIG_FILE and set current project
-        temp_config = tmp_path / "config.json"
-        temp_config.write_text(json.dumps({"current_project": str(project_root)}))
-        monkeypatch.setattr(task_monitor.cli, "CONFIG_FILE", temp_config)
+        # Set environment variable
+        monkeypatch.setenv(ENV_VAR_NAME, str(project_root))
 
         # Mock sys.argv
         monkeypatch.setattr(sys, "argv", ["task-monitor", "queue"])
@@ -232,15 +224,8 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Queue size:" in captured.out
 
-    def test_main_with_project_path_override(self, project_root, completed_job_result, monkeypatch, capsys, tmp_path):
+    def test_main_with_project_path_override(self, project_root, completed_job_result, monkeypatch, capsys):
         """Test main function with project path override using -p."""
-        import task_monitor.cli
-
-        # Mock CONFIG_FILE to avoid reading actual config
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr(task_monitor.cli, "CONFIG_FILE", temp_config)
-
-        # Use -p to override project path
         monkeypatch.setattr(sys, "argv", ["task-monitor", "--project-path", str(project_root), "status"])
 
         from task_monitor.cli import main
@@ -252,10 +237,9 @@ class TestMain:
 
     def test_main_use_command(self, project_root, monkeypatch, capsys, tmp_path):
         """Test main function with use command."""
-        import task_monitor.cli
-
-        temp_config = tmp_path / "config.json"
-        monkeypatch.setattr(task_monitor.cli, "CONFIG_FILE", temp_config)
+        # Mock ENV_FILE to use temp directory
+        temp_env = tmp_path / ".env"
+        monkeypatch.setattr("task_monitor.cli.ENV_FILE", temp_env)
 
         monkeypatch.setattr(sys, "argv", ["task-monitor", "use", str(project_root)])
 
@@ -266,13 +250,10 @@ class TestMain:
         assert "Current project set to:" in captured.out
         assert str(project_root) in captured.out
 
-    def test_main_current_command(self, project_root, monkeypatch, capsys, tmp_path):
+    def test_main_current_command(self, project_root, monkeypatch, capsys):
         """Test main function with current command."""
-        import task_monitor.cli
-
-        temp_config = tmp_path / "config.json"
-        temp_config.write_text(json.dumps({"current_project": str(project_root)}))
-        monkeypatch.setattr(task_monitor.cli, "CONFIG_FILE", temp_config)
+        # Set environment variable
+        monkeypatch.setenv(ENV_VAR_NAME, str(project_root))
 
         monkeypatch.setattr(sys, "argv", ["task-monitor", "current"])
 
@@ -282,3 +263,68 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Current project:" in captured.out
         assert str(project_root) in captured.out
+
+    def test_main_load_command(self, project_root, monkeypatch, capsys):
+        """Test main function with load command."""
+        monkeypatch.setenv(ENV_VAR_NAME, str(project_root))
+
+        monkeypatch.setattr(sys, "argv", ["task-monitor", "load"])
+
+        from task_monitor.cli import main
+        main()
+
+        captured = capsys.readouterr()
+        # Should show found/loaded message or no files message
+        assert "Found" in captured.out or "No task files found" in captured.out
+
+
+class TestLoadPendingTasks:
+    """Tests for load_pending_tasks function."""
+
+    def test_load_no_tasks(self, project_root, capsys):
+        """Test loading when pending directory is empty."""
+        load_pending_tasks(project_root)
+
+        captured = capsys.readouterr()
+        assert "No task files found" in captured.out
+
+    def test_load_with_tasks(self, project_root, capsys):
+        """Test loading existing task files."""
+        pending_dir = project_root / "tasks" / "task-monitor" / "pending"
+
+        # Create test task files
+        (pending_dir / "task-20260101-120000-test-1.md").write_text("# Test Task 1")
+        (pending_dir / "task-20260101-130000-test-2.md").write_text("# Test Task 2")
+        (pending_dir / "task-20260101-140000-test-3.md").write_text("# Test Task 3")
+
+        load_pending_tasks(project_root)
+
+        captured = capsys.readouterr()
+        assert "Found 3 task file(s)" in captured.out
+        assert "Successfully loaded 3 task file(s)" in captured.out
+        assert "task-20260101-120000-test-1.md" in captured.out
+        assert "task-20260101-130000-test-2.md" in captured.out
+        assert "task-20260101-140000-test-3.md" in captured.out
+
+    def test_load_filters_invalid_names(self, project_root, capsys):
+        """Test that load only processes files matching the task pattern."""
+        pending_dir = project_root / "tasks" / "task-monitor" / "pending"
+
+        # Create valid and invalid files
+        (pending_dir / "task-20260101-120000-valid.md").write_text("# Valid")
+        (pending_dir / "invalid-name.txt").write_text("# Invalid")
+        (pending_dir / "readme.md").write_text("# Invalid")
+
+        load_pending_tasks(project_root)
+
+        captured = capsys.readouterr()
+        assert "Found 1 task file(s)" in captured.out
+        assert "task-20260101-120000-valid.md" in captured.out
+
+    def test_load_nonexistent_directory(self, tmp_path, capsys):
+        """Test loading when pending directory doesn't exist."""
+        nonexistent_path = tmp_path / "nonexistent"
+        load_pending_tasks(nonexistent_path)
+
+        captured = capsys.readouterr()
+        assert "does not exist" in captured.out

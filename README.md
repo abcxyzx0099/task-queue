@@ -108,7 +108,7 @@ systemctl --user start task-monitor.service
 | **CLI command** | `~/.local/bin/task-monitor` | Wrapper script |
 | **Virtual environment** | `/home/admin/workspaces/task-monitor/.venv/` | Directory |
 | **Systemd service** | `~/.config/systemd/user/task-monitor.service` | Service unit |
-| **Config file** | `~/.config/task-monitor/config.json` | Project configuration |
+| **Environment variable** | `~/.bashrc` or `~/.zshrc` (`TASK_MONITOR_PROJECT`) | Shell env var |
 | **Lock file** | `~/.config/task-monitor/task-monitor.lock` | Instance lock |
 
 ### Current Installation Details
@@ -206,12 +206,15 @@ task-monitor current
 
 # Set current project
 task-monitor use /path/to/project
+
+# Load existing task files from pending directory
+task-monitor load
 ```
 
 ### Project Management
 
 ```bash
-# Set current project
+# Set current project (updates .env file in source directory)
 task-monitor use /path/to/project
 
 # Show current project
@@ -222,13 +225,35 @@ task-monitor -p /path/to/project status
 task-monitor -p /path/to/project queue
 ```
 
-**Config file:** `~/.config/task-monitor/config.json`
+**How it works:**
 
-```json
-{
-  "current_project": "/home/admin/workspaces/datachat"
-}
+When you run `task-monitor use <path>`, it updates the `.env` file in the task-monitor source directory:
+```bash
+export TASK_MONITOR_PROJECT="/path/to/project"
 ```
+
+The CLI wrapper script (`~/.local/bin/task-monitor`) sources this `.env` file before running Python, so the environment variable is automatically available. No shell reload needed.
+
+### Loading Existing Tasks
+
+```bash
+# Load existing task files from pending directory
+task-monitor load
+
+# With project override
+task-monitor -p /path/to/project load
+```
+
+**How it works:**
+
+The `load` command scans the `tasks/task-monitor/pending/` directory for existing task files matching the pattern `task-YYYYMMDD-HHMMSS-*.md` and triggers the watchdog to queue them.
+
+**When to use:**
+- After creating task files before starting the daemon
+- After restarting the daemon when tasks were left in pending
+- To manually trigger queueing of existing tasks
+
+**Note:** Tasks created while the daemon is running are automatically detected by the watchdog. The `load` command is only needed for files that existed before the daemon started.
 
 **Task Status Output:**
 
@@ -311,29 +336,34 @@ journalctl --user -u task-monitor -f
 | `task_monitor/cli.py` | Status query CLI source code |
 | `pyproject.toml` | Package configuration |
 | `~/.config/systemd/user/task-monitor.service` | Systemd service unit (includes PIDFile directive) |
-| `~/.config/task-monitor/config.json` | Current project configuration |
+| `~/.bashrc` or `~/.zshrc` | Shell environment variable: `TASK_MONITOR_PROJECT` |
 | `~/.config/task-monitor/task-monitor.lock` | Instance lock file (prevents multiple instances) |
 
 ## Configuration
 
 ### Current Project
 
-Location: `~/.config/task-monitor/config.json`
-
-```json
-{
-  "current_project": "/home/admin/workspaces/datachat"
-}
-```
+The CLI uses the `TASK_MONITOR_PROJECT` environment variable to determine the current project.
 
 Set the current project with:
 ```bash
 task-monitor use /path/to/project
+source ~/.bashrc  # or ~/.zshrc
 ```
 
 Show the current project with:
 ```bash
 task-monitor current
+```
+
+**Environment variable:**
+```bash
+$TASK_MONITOR_PROJECT
+```
+
+**Added to shell rc file:**
+```bash
+export TASK_MONITOR_PROJECT="/path/to/project"
 ```
 
 ### Lock File
@@ -371,7 +401,7 @@ If you see "Another instance is already running" when starting the service:
 1. Verify task name matches pattern `task-????????-??????-*.md`
 2. Check daemon is running: `systemctl --user status task-monitor`
 3. Check observer started: `journalctl --user -u task-monitor | grep "Observer started"`
-4. Verify project is registered: `cat ~/.config/task-monitor/registered.json`
+4. Verify current project: `task-monitor current`
 
 ### CLI shows "Task not found"
 
