@@ -229,10 +229,10 @@ task-monitor -p /path/to/project queue
 
 When you run `task-monitor use <path>`, it updates the `.env` file in the task-monitor source directory:
 ```bash
-export TASK_MONITOR_PROJECT="/path/to/project"
+TASK_MONITOR_PROJECT="/path/to/project"
 ```
 
-The CLI wrapper script (`~/.local/bin/task-monitor`) sources this `.env` file before running Python, so the environment variable is automatically available. No shell reload needed.
+The CLI and daemon both use `python-dotenv` to load this file, so the environment variable is automatically available. No shell reload needed.
 
 ### Loading Existing Tasks
 
@@ -361,10 +361,14 @@ task-monitor current
 $TASK_MONITOR_PROJECT
 ```
 
-**Added to shell rc file:**
+**Alternative method: Set in shell rc file**
+You can also set the environment variable directly in `~/.bashrc` or `~/.zshrc`:
 ```bash
 export TASK_MONITOR_PROJECT="/path/to/project"
 ```
+Then reload with `source ~/.bashrc` (or `source ~/.zshrc`).
+
+**Note:** Using `task-monitor use <path>` is preferred as it updates the `.env` file that both CLI and daemon read automatically.
 
 ### Lock File
 

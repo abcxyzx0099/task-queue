@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -20,7 +21,12 @@ from task_monitor.models import TaskStatus
 # Task monitor path relative to project root (e.g., "tasks/task-monitor")
 task_monitor_path = "tasks/task-monitor"
 
-REGISTRY_FILE = Path.home() / ".config" / "task-monitor" / "registered.json"
+# Environment variable name for current project (must match cli.py)
+ENV_VAR_NAME = "TASK_MONITOR_PROJECT"
+
+# .env file location (matches CLI location)
+ENV_FILE = Path(__file__).parent.parent / ".env"
+
 LOCK_FILE = Path.home() / ".config" / "task-monitor" / "task-monitor.lock"
 
 
@@ -76,35 +82,37 @@ class InstanceLock:
         self.release()
 
 
-class MultiProjectMonitor:
-    """Monitor multiple projects, each with their own task_monitor_path/pending directory."""
+class TaskMonitor:
+    """Monitor a single project's task_monitor_path/pending directory."""
 
     def __init__(self):
-        self.projects = {}  # {project_name: {path, executor, queue, observer, event_handler, started}}
+        self.project = None  # {name, path, executor, queue, observer, event_handler, started}
         self.running = False
-        self.observers = []
         self.event_loop = None
-        self.processor_tasks = []  # Track processor tasks for proper cleanup
+        self.processor_task = None  # Track processor task for proper cleanup
         self.instance_lock = InstanceLock(LOCK_FILE)
 
-    def load_registry(self):
-        """Load project registry."""
-        if not REGISTRY_FILE.exists():
-            logging.warning(f"Registry file not found: {REGISTRY_FILE}")
-            return {}
+    def _get_current_project_path(self) -> Path:
+        """Get the current project path from .env file or environment variable."""
+        # Try loading from .env file (works for both CLI and systemd)
+        if ENV_FILE.exists():
+            load_dotenv(ENV_FILE)
 
-        with open(REGISTRY_FILE, 'r') as f:
-            registry = json.load(f)
+        # Read from environment (loaded from .env or already set)
+        path = os.environ.get(ENV_VAR_NAME)
+        if path:
+            return Path(path)
 
-        return registry.get("projects", {})
+        return None
 
-    def setup_project(self, name: str, config: dict):
-        """Setup monitoring for a single project."""
-        project_path = Path(config["path"])
-
+    def _setup_project(self, project_path: Path) -> bool:
+        """Setup monitoring for the current project."""
         if not project_path.exists():
             logging.error(f"Project path does not exist: {project_path}")
             return False
+
+        # Use project directory name as the project name
+        name = project_path.name
 
         # Create directories
         tasks_dir = project_path / task_monitor_path / "pending"
@@ -127,7 +135,8 @@ class MultiProjectMonitor:
             project_root=str(project_path)
         )
 
-        self.projects[name] = {
+        self.project = {
+            "name": name,
             "path": project_path,
             "executor": executor,
             "queue": queue,
@@ -140,7 +149,7 @@ class MultiProjectMonitor:
         return True
 
     def start(self):
-        """Start monitoring all projects."""
+        """Start monitoring the current project."""
         # Configure root logging
         logging.basicConfig(
             level=logging.INFO,
@@ -149,7 +158,7 @@ class MultiProjectMonitor:
         )
         logger = logging.getLogger(__name__)
 
-        logger.info("Starting Multi-Project Task Monitor")
+        logger.info("Starting Task Monitor")
 
         # Try to acquire instance lock
         if not self.instance_lock.acquire():
@@ -158,85 +167,58 @@ class MultiProjectMonitor:
 
         logger.info(f"Instance lock acquired: {LOCK_FILE} (PID {os.getpid()})")
 
-        # Load registry and setup all projects
-        projects_config = self.load_registry()
+        # Get current project from environment variable
+        project_path = self._get_current_project_path()
 
-        if not projects_config:
-            logger.warning("No projects registered. Add projects with: task-monitor-control register <path>")
+        if not project_path:
+            logger.warning(f"No current project set.")
+            logger.warning(f"Set a project with: task-monitor use <path>")
+            logger.warning(f"Or set the ${ENV_VAR_NAME} environment variable")
             return
 
-        for name, config in projects_config.items():
-            if not config.get("enabled", True):
-                logger.info(f"Project '{name}' is disabled, skipping")
-                continue
-            self.setup_project(name, config)
-
-        if not self.projects:
-            logger.error("No valid projects configured")
+        # Setup the project
+        if not self._setup_project(project_path):
+            logger.error(f"Failed to setup project: {project_path}")
             return
 
-        logger.info(f"Monitoring {len(self.projects)} project(s)")
+        logger.info(f"Monitoring project: {self.project['name']} at {project_path}")
 
         # Run the async main function
         asyncio.run(self._run())
 
     async def _run(self):
-        """Main async loop - setup observers and process queues."""
+        """Main async loop - setup observer and process queue."""
         self.running = True
         self.event_loop = asyncio.get_event_loop()
 
-        # Create observers and event handlers with access to event loop
-        for name, project in self.projects.items():
-            tasks_dir = project["path"] / task_monitor_path / "pending"
-            event_handler = TaskFileHandler(
-                project["queue"],
-                name,
-                project["path"],
-                self.event_loop
-            )
-            observer = Observer()
-            observer.schedule(event_handler, str(tasks_dir), recursive=False)
+        # Create observer and event handler with access to event loop
+        tasks_dir = self.project["path"] / task_monitor_path / "pending"
+        event_handler = TaskFileHandler(
+            self.project["queue"],
+            self.project["name"],
+            self.project["path"],
+            self.event_loop
+        )
+        observer = Observer()
+        observer.schedule(event_handler, str(tasks_dir), recursive=False)
 
-            project["observer"] = observer
-            project["event_handler"] = event_handler
+        self.project["observer"] = observer
+        self.project["event_handler"] = event_handler
 
-        # Start all observers
-        for name, project in self.projects.items():
-            project["observer"].start()
-            project["started"] = True
-            logging.info(f"Observer started for '{name}': {project['path'] / task_monitor_path / 'pending'}")
+        # Start observer
+        observer.start()
+        self.project["started"] = True
+        logging.info(f"Observer started: {self.project['path'] / task_monitor_path / 'pending'}")
 
-        # Start queue processors for all projects
-        await self._run_all_queues()
+        # Start queue processor
+        await self._process_queue()
 
-    async def _run_all_queues(self):
-        """Run queue processors for all projects."""
-        self.processor_tasks = []
-
-        for name, project in self.projects.items():
-            processor = asyncio.create_task(
-                self._process_project_queue(name, project)
-            )
-            self.processor_tasks.append(processor)
-
-        # Wait for all processors, handling cancellation gracefully
-        try:
-            await asyncio.gather(*self.processor_tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            # During shutdown, cancel all processor tasks
-            logging.info("Shutting down queue processors...")
-            for task in self.processor_tasks:
-                if not task.done():
-                    task.cancel()
-            # Wait for all tasks to complete cancellation
-            await asyncio.gather(*self.processor_tasks, return_exceptions=True)
-            logging.info("Queue processors stopped")
-
-    async def _process_project_queue(self, name: str, project: dict):
-        """Process tasks for a specific project."""
+    async def _process_queue(self):
+        """Process tasks for the current project."""
+        name = self.project["name"]
+        queue = self.project["queue"]
+        executor = self.project["executor"]
         logger = logging.getLogger(__name__)
-        queue = project["queue"]
-        executor = project["executor"]
 
         logger.info(f"Queue processor started for '{name}'")
 
@@ -286,29 +268,28 @@ class MultiProjectMonitor:
             raise
 
     def stop(self):
-        """Stop all observers."""
+        """Stop the observer and queue processor."""
         logging.info("Stopping monitor...")
         self.running = False
 
-        # Send poison pills to all queues to signal graceful shutdown
-        for name, project in self.projects.items():
-            asyncio.create_task(project["queue"].put(None))
-            logging.info(f"[{name}] Sent shutdown signal to queue")
+        if not self.project:
+            return
 
-        # Cancel all processor tasks
-        for task in self.processor_tasks:
-            if not task.done():
-                task.cancel()
+        # Send poison pill to queue to signal graceful shutdown
+        asyncio.create_task(self.project["queue"].put(None))
+        logging.info(f"[{self.project['name']}] Sent shutdown signal to queue")
 
-        # Stop observers
-        for name, project in self.projects.items():
-            if project.get("observer"):
-                project["observer"].stop()
+        # Cancel processor task
+        if self.processor_task and not self.processor_task.done():
+            self.processor_task.cancel()
 
-        # Wait for observers to finish (only those that were started)
-        for project in self.projects.values():
-            if project.get("observer") and project.get("started", False):
-                project["observer"].join()
+        # Stop observer
+        if self.project.get("observer"):
+            self.project["observer"].stop()
+
+        # Wait for observer to finish (only if it was started)
+        if self.project.get("observer") and self.project.get("started", False):
+            self.project["observer"].join()
 
         # Release instance lock
         self.instance_lock.release()
@@ -427,7 +408,7 @@ class TaskFileHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    monitor = MultiProjectMonitor()
+    monitor = TaskMonitor()
     try:
         monitor.start()
     except KeyboardInterrupt:

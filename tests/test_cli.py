@@ -17,6 +17,7 @@ from task_monitor.cli import (
     use_project,
     get_current_project,
     ENV_VAR_NAME,
+    ENV_FILE,
 )
 
 
@@ -189,9 +190,14 @@ class TestProjectManagement:
         result = get_current_project()
         assert result == project_root
 
-    def test_get_current_project_returns_none_when_not_set(self, monkeypatch):
-        """Test that get_current_project returns None when env var is not set."""
+    def test_get_current_project_returns_none_when_not_set(self, monkeypatch, tmp_path):
+        """Test that get_current_project returns None when env var is not set and .env doesn't exist."""
+        # Remove env var
         monkeypatch.delenv(ENV_VAR_NAME, raising=False)
+
+        # Mock ENV_FILE to a non-existent temporary file
+        fake_env = tmp_path / "nonexistent.env"
+        monkeypatch.setattr("task_monitor.cli.ENV_FILE", fake_env)
 
         result = get_current_project()
         assert result is None

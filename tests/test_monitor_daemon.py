@@ -12,27 +12,25 @@ import time
 
 from task_monitor.monitor_daemon import (
     InstanceLock,
-    MultiProjectMonitor,
+    TaskMonitor,
     ProjectTaskQueue,
     TaskFileHandler,
-    REGISTRY_FILE,
     LOCK_FILE,
     task_monitor_path,
+    ENV_VAR_NAME,
 )
 
 
 @pytest.fixture
-def temp_registry(temp_dir, monkeypatch):
-    """Patch REGISTRY_FILE and LOCK_FILE to use temp directory (module-level fixture)."""
-    test_registry = temp_dir / "registry.json"
-    test_lock = temp_dir / "monitor.lock"
+def temp_lock(monkeypatch):
+    """Patch LOCK_FILE to use temp directory."""
+    test_lock = tempfile.mktemp(suffix=".lock")
 
     # Import the module to patch the globals
     import task_monitor.monitor_daemon as md
-    monkeypatch.setattr(md, "REGISTRY_FILE", test_registry)
-    monkeypatch.setattr(md, "LOCK_FILE", test_lock)
+    monkeypatch.setattr(md, "LOCK_FILE", Path(test_lock))
 
-    yield test_registry, test_lock
+    yield Path(test_lock)
 
 
 class TestInstanceLock:
@@ -154,57 +152,74 @@ class TestProjectTaskQueue:
         assert elapsed >= 0.1  # Should have waited
 
 
-class TestMultiProjectMonitor:
-    """Tests for MultiProjectMonitor class."""
+class TestTaskMonitor:
+    """Tests for TaskMonitor class."""
 
     @pytest.fixture
-    def monitor(self, temp_registry):
-        """Create a test monitor with patched registry."""
-        monitor = MultiProjectMonitor()
+    def monitor(self):
+        """Create a test monitor."""
+        monitor = TaskMonitor()
         yield monitor
 
-    def test_load_registry_empty(self, monitor):
-        """Test loading when registry doesn't exist."""
-        registry = monitor.load_registry()
-        assert registry == {}
+    def test_get_current_project_path_from_env(self, monitor, monkeypatch):
+        """Test getting project path from environment variable."""
+        project_path = "/test/project"
+        monkeypatch.setenv(ENV_VAR_NAME, project_path)
 
-    def test_load_registry_with_projects(self, monitor, temp_registry):
-        """Test loading registry with projects."""
-        registry_file, _ = temp_registry
-        registry_data = {
-            "projects": {
-                "project1": {"path": "/path1", "enabled": True},
-                "project2": {"path": "/path2", "enabled": False},
-            }
-        }
-        registry_file.write_text(json.dumps(registry_data))
+        result = monitor._get_current_project_path()
+        assert str(result) == project_path
 
-        registry = monitor.load_registry()
-        assert len(registry) == 2
-        assert registry["project1"]["path"] == "/path1"
-        assert registry["project2"]["enabled"] is False
+    def test_get_current_project_path_not_set(self, monitor, monkeypatch, tmp_path):
+        """Test getting project path when not set."""
+        # Remove env var
+        monkeypatch.delenv(ENV_VAR_NAME, raising=False)
+
+        # Patch ENV_FILE to a non-existent temporary file
+        import task_monitor.monitor_daemon as md
+        fake_env = tmp_path / "nonexistent.env"
+        monkeypatch.setattr(md, "ENV_FILE", fake_env)
+
+        result = monitor._get_current_project_path()
+        assert result is None
+
+    def test_get_current_project_path_from_env_file(self, monitor, monkeypatch, tmp_path):
+        """Test getting project path from .env file when env var is not set."""
+        # Remove env var
+        monkeypatch.delenv(ENV_VAR_NAME, raising=False)
+
+        # Create a temporary .env file with project path (standard format, no export)
+        fake_env = tmp_path / ".env"
+        project_path = "/test/project/from-env-file"
+        fake_env.write_text(f'{ENV_VAR_NAME}="{project_path}"\n')
+
+        # Patch ENV_FILE
+        import task_monitor.monitor_daemon as md
+        monkeypatch.setattr(md, "ENV_FILE", fake_env)
+
+        result = monitor._get_current_project_path()
+        assert str(result) == project_path
 
     def test_setup_project(self, monitor, temp_dir):
         """Test setting up a project."""
         project_path = temp_dir / "my-project"
         project_path.mkdir()
 
-        result = monitor.setup_project("test-project", {"path": str(project_path)})
+        result = monitor._setup_project(project_path)
 
         assert result is True
-        assert "test-project" in monitor.projects
-        assert monitor.projects["test-project"]["path"] == project_path
+        assert monitor.project is not None
+        assert monitor.project["name"] == "my-project"
+        assert monitor.project["path"] == project_path
 
         # Verify directories were created
         assert (project_path / task_monitor_path / "pending").exists()
         assert (project_path / task_monitor_path / "results").exists()
         assert (project_path / task_monitor_path / "logs").exists()
         assert (project_path / task_monitor_path / "state").exists()
-        assert (project_path / task_monitor_path / "archive").exists()
 
     def test_setup_project_nonexistent_path(self, monitor):
         """Test setup fails with nonexistent path."""
-        result = monitor.setup_project("test", {"path": "/nonexistent/path"})
+        result = monitor._setup_project(Path("/nonexistent/path"))
         assert result is False
 
     @pytest.mark.asyncio
@@ -213,8 +228,8 @@ class TestMultiProjectMonitor:
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
-        project = monitor.projects["test"]
+        monitor._setup_project(project_path)
+        project = monitor.project
 
         # Track completion
         processor_complete = False
@@ -222,7 +237,7 @@ class TestMultiProjectMonitor:
         async def mock_processor():
             nonlocal processor_complete
             try:
-                await monitor._process_project_queue("test", project)
+                await monitor._process_queue()
             except asyncio.CancelledError:
                 raise
             finally:
@@ -240,31 +255,27 @@ class TestMultiProjectMonitor:
         assert processor_complete is True
 
     @pytest.mark.asyncio
-    async def test_stop_sends_poison_pills(self, monitor, temp_dir):
-        """Test that stop sends poison pills to all queues."""
+    async def test_stop_sends_poison_pill(self, monitor, temp_dir):
+        """Test that stop sends poison pill to queue."""
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
-        queue = monitor.projects["test"]["queue"]
+        monitor._setup_project(project_path)
+        queue = monitor.project["queue"]
 
         # Put items in queue to verify poison pill is sent
         await queue.put("task-001.md")
         assert queue.size == 1
 
-        # Mock observers and processor tasks
-        monitor.processor_tasks = []
-        monitor.observers = []
+        # Mock observer and processor task
+        mock_observer = Mock()
+        monitor.project["observer"] = mock_observer
+        monitor.processor_task = None
 
         monitor.stop()
 
-        # Check that poison pill was added (queue size should be 2 now)
-        # Note: stop() creates tasks with asyncio.create_task, so we need to wait
-        await asyncio.sleep(0.1)  # Give time for create_task to schedule
-
-        # The queue should have the poison pill added
-        # We can't directly check the queue size after stop since put is async
-        # Instead verify the stop logic doesn't crash
+        # Check that observer.stop() was called
+        mock_observer.stop.assert_called_once()
         assert monitor.running is False
 
 
@@ -293,15 +304,7 @@ class TestTaskFileHandler:
 
     def test_on_created_matches_task_pattern(self, handler, temp_dir, monkeypatch):
         """Test that task files matching pattern are queued."""
-        # Mock run_coroutine_threadsafe to avoid needing a real event loop
-        mock_future = Mock()
-        mock_future.result = Mock(return_value=None)
-
         call_log = []
-
-        def mock_run_coro(coro, loop):
-            call_log.append(coro)
-            return mock_future
 
         monkeypatch.setattr(
             handler.task_queue.__class__,
@@ -397,14 +400,14 @@ class TestIntegration:
 
     def test_directory_structure_creation(self, temp_dir):
         """Test that all required directories are created."""
-        monitor = MultiProjectMonitor()
+        monitor = TaskMonitor()
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
+        monitor._setup_project(project_path)
 
         base = project_path / task_monitor_path
-        expected_dirs = ["pending", "results", "logs", "state", "archive"]
+        expected_dirs = ["pending", "results", "logs", "state"]
 
         for dir_name in expected_dirs:
             assert (base / dir_name).exists(), f"Directory {dir_name} should exist"
@@ -417,7 +420,7 @@ class TestQueueProcessorErrorHandling:
     @pytest.fixture
     def monitor(self, temp_dir):
         """Create a test monitor."""
-        monitor = MultiProjectMonitor()
+        monitor = TaskMonitor()
         yield monitor
 
     @pytest.mark.asyncio
@@ -426,8 +429,8 @@ class TestQueueProcessorErrorHandling:
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
-        project = monitor.projects["test"]
+        monitor._setup_project(project_path)
+        project = monitor.project
         queue = project["queue"]
 
         # Mock executor to raise exception
@@ -441,7 +444,7 @@ class TestQueueProcessorErrorHandling:
         await queue.put(None)
 
         # Process should not crash, should handle exception and exit on poison pill
-        await monitor._process_project_queue("test", project)
+        await monitor._process_queue()
 
         # State should be clean
         assert queue.current_task is None
@@ -453,11 +456,11 @@ class TestQueueProcessorErrorHandling:
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
-        project = monitor.projects["test"]
+        monitor._setup_project(project_path)
+        project = monitor.project
 
         # Start processor and cancel it
-        task = asyncio.create_task(monitor._process_project_queue("test", project))
+        task = asyncio.create_task(monitor._process_queue())
 
         # Give it a moment to start
         await asyncio.sleep(0.01)
@@ -479,8 +482,8 @@ class TestQueueProcessorErrorHandling:
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
-        project = monitor.projects["test"]
+        monitor._setup_project(project_path)
+        project = monitor.project
         queue = project["queue"]
 
         # Create mock result
@@ -504,7 +507,7 @@ class TestQueueProcessorErrorHandling:
         await queue.put(None)
 
         # Process one task then exit on poison pill
-        await monitor._process_project_queue("test", project)
+        await monitor._process_queue()
 
         # Verify state was saved
         state = queue._load_state()
@@ -516,13 +519,13 @@ class TestObserverLifecycle:
     """Tests for observer start/stop lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_observer_start_and_stop(self, temp_dir, temp_registry):
+    async def test_observer_start_and_stop(self, temp_dir):
         """Test that observers can be started and stopped."""
-        monitor = MultiProjectMonitor()
+        monitor = TaskMonitor()
         project_path = temp_dir / "test-project"
         project_path.mkdir()
 
-        monitor.setup_project("test", {"path": str(project_path)})
+        monitor._setup_project(project_path)
 
         # Mock acquire to prevent actual lock
         monitor.instance_lock.acquire = Mock(return_value=True)
@@ -531,41 +534,42 @@ class TestObserverLifecycle:
         monitor.running = True
         monitor.event_loop = asyncio.get_running_loop()
 
-        for name, project in monitor.projects.items():
-            tasks_dir = project["path"] / task_monitor_path / "pending"
-            event_handler = TaskFileHandler(
-                project["queue"],
-                name,
-                project["path"],
-                monitor.event_loop
-            )
-            observer = Mock()
-            project["observer"] = observer
-            project["event_handler"] = event_handler
-
-        # Mark as started
-        for name, project in monitor.projects.items():
-            project["started"] = True
+        project = monitor.project
+        tasks_dir = project["path"] / task_monitor_path / "pending"
+        event_handler = TaskFileHandler(
+            project["queue"],
+            project["name"],
+            project["path"],
+            monitor.event_loop
+        )
+        mock_observer = Mock()
+        project["observer"] = mock_observer
+        project["event_handler"] = event_handler
+        project["started"] = True
 
         # Test stop calls observer.stop()
-        monitor.observers = []
-        monitor.processor_tasks = []
+        monitor.processor_task = None
         monitor.stop()
 
-        # Verify lock was released
+        # Verify observer.stop() was called and lock was released
+        mock_observer.stop.assert_called_once()
         assert monitor.running is False
 
 
 class TestMonitorStart:
     """Tests for monitor start method."""
 
-    def test_start_with_no_projects(self, temp_dir, temp_registry, monkeypatch, caplog):
-        """Test start when no projects are registered."""
-        # Ensure registry is empty
-        registry_file, _ = temp_registry
-        registry_file.unlink(missing_ok=True)
+    def test_start_with_no_project_set(self, temp_dir, monkeypatch, caplog):
+        """Test start when no project is set via environment variable."""
+        # Ensure env var is not set
+        monkeypatch.delenv(ENV_VAR_NAME, raising=False)
 
-        monitor = MultiProjectMonitor()
+        # Mock ENV_FILE to a non-existent temporary file
+        import task_monitor.monitor_daemon as md
+        fake_env = temp_dir / "nonexistent.env"
+        monkeypatch.setattr(md, "ENV_FILE", fake_env)
+
+        monitor = TaskMonitor()
 
         # Track what was run
         run_called = []
@@ -582,56 +586,36 @@ class TestMonitorStart:
 
         monitor.start()
 
-        # Should return early without calling asyncio.run when no projects
+        # Should return early without calling asyncio.run when no project
         assert len(run_called) == 0
-        # Should log a warning
-        assert "No projects registered" in caplog.text
+        # Should log a warning about setting current project
+        assert "No current project set" in caplog.text or "Set a project with" in caplog.text
 
-    def test_start_exits_when_lock_fails(self, temp_dir, temp_registry, monkeypatch):
+    def test_start_exits_when_lock_fails(self, temp_dir, monkeypatch):
         """Test start exits when another instance is already running."""
-        monitor = MultiProjectMonitor()
+        monitor = TaskMonitor()
 
         # Mock acquire to fail (simulating lock held)
         monitor.instance_lock.acquire = Mock(return_value=False)
 
-        exit_called = []
+        # The start() method will call sys.exit(1) which raises SystemExit
+        with pytest.raises(SystemExit) as exc_info:
+            monitor.start()
 
-        def mock_exit(code):
-            exit_called.append(code)
+        # Should have exited with code 1
+        assert exc_info.value.code == 1
 
-        monkeypatch.setattr(sys, "exit", mock_exit)
+    def test_setup_project_creates_directories(self, temp_dir):
+        """Test that setup creates all required directories."""
+        project_path = temp_dir / "test-project"
+        project_path.mkdir()
 
-        monitor.start()
+        monitor = TaskMonitor()
+        monitor._setup_project(project_path)
 
-        # Should have called sys.exit(1)
-        assert exit_called == [1]
+        base = project_path / task_monitor_path
+        expected_dirs = ["pending", "results", "logs", "state"]
 
-    def test_setup_project_skips_disabled(self, temp_dir, temp_registry):
-        """Test that disabled projects are skipped during setup."""
-        registry_file, _ = temp_registry
-        registry_data = {
-            "projects": {
-                "enabled_project": {
-                    "path": str(temp_dir / "enabled"),
-                    "enabled": True
-                },
-                "disabled_project": {
-                    "path": str(temp_dir / "disabled"),
-                    "enabled": False
-                },
-            }
-        }
-        registry_file.write_text(json.dumps(registry_data))
-
-        (temp_dir / "enabled").mkdir()
-        (temp_dir / "disabled").mkdir()
-
-        monitor = MultiProjectMonitor()
-        projects = monitor.load_registry()
-
-        # Setup only enabled project
-        monitor.setup_project("enabled_project", projects["enabled_project"])
-
-        # Only enabled project should be set up
-        assert "enabled_project" in monitor.projects
-        assert "disabled_project" not in monitor.projects
+        for dir_name in expected_dirs:
+            assert (base / dir_name).exists(), f"Directory {dir_name} should exist"
+            assert (base / dir_name).is_dir(), f"{dir_name} should be a directory"

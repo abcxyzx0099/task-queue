@@ -41,8 +41,8 @@ class TaskExecutor:
         task_id = Path(task_file).stem
         task_path = self.tasks_dir / task_file
 
-        # Read task document content
-        task_content = self._read_task_document(task_path)
+        # Calculate relative path from project root for skill invocation
+        relative_task_path = task_path.relative_to(self.project_root)
 
         # Log task start to systemd journal
         logger.info(f"[{task_id}] Task started")
@@ -52,6 +52,7 @@ class TaskExecutor:
             cwd=str(self.project_root),  # Set working directory
             permission_mode="bypassPermissions",  # Full autonomous execution
             setting_sources=["project"],  # Load project settings (including skills)
+            tools={"type": "preset", "preset": "claude_code"},  # Full access to Claude Code tools
         )
 
         start_time = datetime.now()
@@ -67,13 +68,11 @@ class TaskExecutor:
         full_output = []
 
         try:
-            # Create query object
+            # Create query object - pass file path instead of content
             q = query(
                 prompt=f"""/task-implementation
 
-Execute the following task:
-
-{task_content}
+Execute task at: {relative_task_path}
 """,
                 options=options
             )

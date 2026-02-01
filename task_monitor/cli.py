@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
 
 
 # Environment variable name for current project
@@ -18,7 +19,11 @@ task_monitor_path = "tasks/task-monitor"
 
 
 def get_current_project():
-    """Get the current project path from environment variable."""
+    """Get the current project path from .env file or environment variable."""
+    # Try loading from .env file
+    if ENV_FILE.exists():
+        load_dotenv(ENV_FILE)
+
     path = os.environ.get(ENV_VAR_NAME)
     if path:
         return Path(path)
@@ -32,18 +37,19 @@ def use_project(path: str):
         print(f"Error: Project path does not exist: {project_path}")
         return False
 
-    # Remove old export if exists
+    # Read existing content
     if ENV_FILE.exists():
         content = ENV_FILE.read_text()
     else:
         content = ""
+        ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # Remove old TASK_MONITOR_PROJECT export if exists
+    # Remove old TASK_MONITOR_PROJECT line if exists
     lines = [line for line in content.split('\n')
-             if not line.startswith(f'export {ENV_VAR_NAME}=')]
+             if not line.startswith(f'{ENV_VAR_NAME}=') and line.strip() != '']
 
-    # Add new export
-    lines.append(f'export {ENV_VAR_NAME}="{project_path}"')
+    # Add new line in standard .env format (no "export")
+    lines.append(f'{ENV_VAR_NAME}="{project_path}"')
 
     # Write back to .env file
     ENV_FILE.write_text('\n'.join(lines) + '\n')
@@ -63,7 +69,7 @@ def show_current():
         return
 
     print(f"Current project: {path}")
-    print(f"Source: ${ENV_VAR_NAME} (from {ENV_FILE})")
+    print(f"Source: {ENV_FILE}")
 
 
 def get_project_root(project_path: str = None):
