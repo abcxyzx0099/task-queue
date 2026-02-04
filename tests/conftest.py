@@ -10,7 +10,7 @@ import json
 
 from task_queue.models import (
     TaskStatus, TaskResult, QueueState, Task,
-    TaskSource, QueueConfig, SpecDirectory, QueueSettings
+    TaskSource, QueueConfig, TaskDocDirectory, QueueSettings
 )
 
 
@@ -74,8 +74,8 @@ def sample_task():
     """Create a sample Task for testing."""
     return Task(
         task_id="task-20250131-100000-test-task",
-        spec_file="tasks/task-documents/task-20250131-100000-test-task.md",
-        spec_dir_id="main",
+        task_doc_file="tasks/task-documents/task-20250131-100000-test-task.md",
+        task_doc_dir_id="main",
         status=TaskStatus.PENDING,
         source=TaskSource.LOAD,
     )
@@ -86,8 +86,8 @@ def sample_task_result():
     """Create a sample TaskResult for testing."""
     return TaskResult(
         task_id="test-task-001",
-        spec_file="tasks/task-documents/test-task.md",
-        spec_dir_id="main",
+        task_doc_file="tasks/task-documents/test-task.md",
+        task_doc_dir_id="main",
         status=TaskStatus.COMPLETED,
         started_at="2025-01-31T10:00:05",
         completed_at="2025-01-31T10:00:15",
@@ -106,14 +106,14 @@ def sample_queue_state():
         queue=[
             Task(
                 task_id="task-001.md",
-                spec_file="tasks/task-documents/task-001.md",
-                spec_dir_id="main",
+                task_doc_file="tasks/task-documents/task-001.md",
+                task_doc_dir_id="main",
                 status=TaskStatus.PENDING,
             ),
             Task(
                 task_id="task-002.md",
-                spec_file="tasks/task-documents/task-002.md",
-                spec_dir_id="main",
+                task_doc_file="tasks/task-documents/task-002.md",
+                task_doc_dir_id="main",
                 status=TaskStatus.COMPLETED,
             ),
         ],
@@ -125,11 +125,11 @@ def sample_config():
     """Create a sample QueueConfig for testing."""
     return QueueConfig(
         project_path="/tmp/test-project",
-        spec_directories=[
-            SpecDirectory(
+        task_doc_directories=[
+            TaskDocDirectory(
                 id="main",
                 path="/tmp/test-project/tasks/task-documents",
-                description="Main spec directory"
+                description="Main task doc directory"
             )
         ]
     )
@@ -181,8 +181,8 @@ def queue_state_file(task_queue_dir):
         "queue": [
             {
                 "task_id": "task-001.md",
-                "spec_file": "tasks/task-documents/task-001.md",
-                "spec_dir_id": "main",
+                "task_doc_file": "tasks/task-documents/task-001.md",
+                "task_doc_dir_id": "main",
                 "status": "pending",
                 "source": "load",
                 "added_at": "2025-01-31T10:00:00",

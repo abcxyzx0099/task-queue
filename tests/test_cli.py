@@ -22,7 +22,7 @@ class TestCLICommands:
 
         config = QueueConfig(
             project_path=str(tmp_path),
-            spec_directories=[]
+            task_doc_directories=[]
         )
         return config, tmp_path
 
@@ -85,7 +85,7 @@ class TestCLICommands:
             assert result == 0
             assert str(project_path) in output
 
-    def test_cmd_add_spec(self, mock_config):
+    def test_cmd_add_doc(self, mock_config):
         """Test add-spec command."""
         config, project_path = mock_config
         spec_dir = project_path / "specs"
@@ -94,70 +94,70 @@ class TestCLICommands:
         with patch('task_queue.cli.ConfigManager') as MockConfigManager:
             mock_instance = MagicMock()
             mock_instance.config = config
-            mock_instance.add_spec_directory.return_value = MagicMock(
+            mock_instance.add_task_doc_directory.return_value = MagicMock(
                 id="main",
                 path=str(spec_dir),
                 description=""
             )
             MockConfigManager.return_value = mock_instance
 
-            from task_queue.cli import cmd_add_spec
+            from task_queue.cli import cmd_add_doc
             args = MagicMock(path=str(spec_dir), id="main", description="")
 
-            result = cmd_add_spec(args, mock_instance)
+            result = cmd_add_doc(args, mock_instance)
             assert result == 0
 
-    def test_cmd_remove_spec(self):
+    def test_cmd_remove_doc(self):
         """Test remove-spec command."""
         with patch('task_queue.cli.ConfigManager') as MockConfigManager:
             mock_instance = MagicMock()
-            mock_instance.remove_spec_directory.return_value = True
+            mock_instance.remove_task_doc_directory.return_value = True
             MockConfigManager.return_value = mock_instance
 
-            from task_queue.cli import cmd_remove_spec
+            from task_queue.cli import cmd_remove_doc
             args = MagicMock(id="main")
 
-            result = cmd_remove_spec(args, mock_instance)
+            result = cmd_remove_doc(args, mock_instance)
             assert result == 0
 
-    def test_cmd_list_specs_empty(self):
-        """Test list-specs command with no specs."""
+    def test_cmd_list_docs_empty(self):
+        """Test list-docs command with no docs."""
         with patch('task_queue.cli.ConfigManager') as MockConfigManager:
             mock_instance = MagicMock()
-            mock_instance.list_spec_directories.return_value = []
+            mock_instance.list_task_doc_directories.return_value = []
             MockConfigManager.return_value = mock_instance
 
-            from task_queue.cli import cmd_list_specs
+            from task_queue.cli import cmd_list_docs
             args = MagicMock()
 
             # Capture stdout
             old_stdout = sys.stdout
             sys.stdout = StringIO()
 
-            result = cmd_list_specs(args, mock_instance)
+            result = cmd_list_docs(args, mock_instance)
 
             output = sys.stdout.getvalue()
             sys.stdout = old_stdout
 
             assert result == 0
-            assert "No spec directories" in output
+            assert "No task doc directories" in output
 
-    def test_cmd_list_specs_with_specs(self):
-        """Test list-specs command with specs."""
+    def test_cmd_list_docs_with_docs(self):
+        """Test list-docs command with task docs."""
         with patch('task_queue.cli.ConfigManager') as MockConfigManager:
             mock_spec = MagicMock(id="main", path="/path/to/specs", description="Test")
             mock_instance = MagicMock()
-            mock_instance.list_spec_directories.return_value = [mock_spec]
+            mock_instance.list_task_doc_directories.return_value = [mock_spec]
             MockConfigManager.return_value = mock_instance
 
-            from task_queue.cli import cmd_list_specs
+            from task_queue.cli import cmd_list_docs
             args = MagicMock()
 
             # Capture stdout
             old_stdout = sys.stdout
             sys.stdout = StringIO()
 
-            result = cmd_list_specs(args, mock_instance)
+            result = cmd_list_docs(args, mock_instance)
 
             output = sys.stdout.getvalue()
             sys.stdout = old_stdout
