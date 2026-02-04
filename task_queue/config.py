@@ -143,12 +143,9 @@ class ConfigManager:
 
         return result
 
-    def list_spec_directories(self, enabled_only: bool = False) -> List[SpecDirectory]:
+    def list_spec_directories(self) -> List[SpecDirectory]:
         """
         List configured spec directories.
-
-        Args:
-            enabled_only: Ignored (kept for backward compatibility)
 
         Returns:
             List of spec directories

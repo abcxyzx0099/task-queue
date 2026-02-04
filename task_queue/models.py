@@ -212,10 +212,6 @@ class QueueConfig(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
-    def get_enabled_spec_directories(self) -> List[SpecDirectory]:
-        """Get list of spec directories."""
-        return self.spec_directories
-
     def get_spec_directory(self, spec_id: str) -> Optional[SpecDirectory]:
         """Get spec directory by ID."""
         for spec_dir in self.spec_directories:
