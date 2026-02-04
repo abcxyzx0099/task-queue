@@ -44,7 +44,7 @@ def temp_dir():
 def project_root(temp_dir):
     """Create a mock project root with task directories."""
     task_queue_dir = temp_dir / "tasks" / "task-queue"
-    task_spec_dir = temp_dir / "tasks" / "task-specifications"
+    task_spec_dir = temp_dir / "tasks" / "task-documents"
     task_queue_dir.mkdir(parents=True)
     task_spec_dir.mkdir(parents=True)
 
@@ -60,7 +60,7 @@ def project_root(temp_dir):
 @pytest.fixture
 def task_spec_dir(project_root):
     """Get the task specifications directory."""
-    return project_root / "tasks" / "task-specifications"
+    return project_root / "tasks" / "task-documents"
 
 
 @pytest.fixture
@@ -74,7 +74,7 @@ def sample_task():
     """Create a sample Task for testing."""
     return Task(
         task_id="task-20250131-100000-test-task",
-        spec_file="tasks/task-specifications/task-20250131-100000-test-task.md",
+        spec_file="tasks/task-documents/task-20250131-100000-test-task.md",
         spec_dir_id="main",
         status=TaskStatus.PENDING,
         source=TaskSource.LOAD,
@@ -86,7 +86,7 @@ def sample_task_result():
     """Create a sample TaskResult for testing."""
     return TaskResult(
         task_id="test-task-001",
-        spec_file="tasks/task-specifications/test-task.md",
+        spec_file="tasks/task-documents/test-task.md",
         spec_dir_id="main",
         status=TaskStatus.COMPLETED,
         started_at="2025-01-31T10:00:05",
@@ -106,13 +106,13 @@ def sample_queue_state():
         queue=[
             Task(
                 task_id="task-001.md",
-                spec_file="tasks/task-specifications/task-001.md",
+                spec_file="tasks/task-documents/task-001.md",
                 spec_dir_id="main",
                 status=TaskStatus.PENDING,
             ),
             Task(
                 task_id="task-002.md",
-                spec_file="tasks/task-specifications/task-002.md",
+                spec_file="tasks/task-documents/task-002.md",
                 spec_dir_id="main",
                 status=TaskStatus.COMPLETED,
             ),
@@ -128,7 +128,7 @@ def sample_config():
         spec_directories=[
             SpecDirectory(
                 id="main",
-                path="/tmp/test-project/tasks/task-specifications",
+                path="/tmp/test-project/tasks/task-documents",
                 description="Main spec directory"
             )
         ]
@@ -181,7 +181,7 @@ def queue_state_file(task_queue_dir):
         "queue": [
             {
                 "task_id": "task-001.md",
-                "spec_file": "tasks/task-specifications/task-001.md",
+                "spec_file": "tasks/task-documents/task-001.md",
                 "spec_dir_id": "main",
                 "status": "pending",
                 "source": "load",

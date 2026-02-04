@@ -41,11 +41,11 @@ class TestTask:
         """Test creating a Task."""
         task = Task(
             task_id="task-20250131-100000-test",
-            spec_file="tasks/task-specifications/task.md",
+            spec_file="tasks/task-documents/task.md",
             spec_dir_id="main"
         )
         assert task.task_id == "task-20250131-100000-test"
-        assert task.spec_file == "tasks/task-specifications/task.md"
+        assert task.spec_file == "tasks/task-documents/task.md"
         assert task.spec_dir_id == "main"
         assert task.status == TaskStatus.PENDING
         assert task.source == TaskSource.LOAD
@@ -55,7 +55,7 @@ class TestTask:
         """Test creating a Task with all fields."""
         task = Task(
             task_id="task-20250131-100000-test",
-            spec_file="tasks/task-specifications/task.md",
+            spec_file="tasks/task-documents/task.md",
             spec_dir_id="main",
             status=TaskStatus.COMPLETED,
             source=TaskSource.MANUAL,
@@ -77,7 +77,7 @@ class TestTaskResult:
         """Test creating a TaskResult."""
         result = TaskResult(
             task_id="task-001",
-            spec_file="tasks/task-specifications/task.md",
+            spec_file="tasks/task-documents/task.md",
             spec_dir_id="main",
             status=TaskStatus.COMPLETED,
             started_at="2025-01-31T10:00:00",
@@ -93,7 +93,7 @@ class TestTaskResult:
         """Test TaskResult with output."""
         result = TaskResult(
             task_id="task-001",
-            spec_file="tasks/task-specifications/task.md",
+            spec_file="tasks/task-documents/task.md",
             spec_dir_id="main",
             status=TaskStatus.FAILED,
             started_at="2025-01-31T10:00:00",

@@ -96,7 +96,7 @@ task-queue set-project /home/admin/workspaces/datachat
 ### 2. Add a spec directory
 
 ```bash
-task-queue add-spec /home/admin/workspaces/datachat/tasks/task-specifications --id main
+task-queue add-spec /home/admin/workspaces/datachat/tasks/task-documents --id main
 # Output: ✅ Added spec directory: main
 ```
 
@@ -204,7 +204,7 @@ Configuration file: `~/.config/task-queue/config.json`
   "spec_directories": [
     {
       "id": "main",
-      "path": "/home/admin/workspaces/datachat/tasks/task-specifications",
+      "path": "/home/admin/workspaces/datachat/tasks/task-documents",
       "description": "Main task specifications",
       "added_at": "2026-02-04T12:00:00.000000"
     }
@@ -239,7 +239,7 @@ Configuration file: `~/.config/task-queue/config.json`
     ├── task-archive/            # Completed task specs
     ├── task-queue/            # Monitor-managed directory
     │   └── results/            # Per-project results (if used)
-    └── task-worker-reports/     # Worker execution reports
+    └── task-reports/     # Worker execution reports
 ```
 
 ## Task Specification Format
@@ -310,7 +310,7 @@ Feb 04 20:38:45 task-queue: Task Queue Daemon Starting
 Feb 04 20:38:45 task-queue: Configuration loaded from: ~/.config/task-queue/config.json
 Feb 04 20:38:45 task-queue: Project path: /home/admin/workspaces/datachat
 Feb 04 20:38:45 task-queue: Spec directories: 1
-Feb 04 20:38:45 task-queue:   - main: /home/admin/workspaces/datachat/tasks/task-specifications
+Feb 04 20:38:45 task-queue:   - main: /home/admin/workspaces/datachat/tasks/task-documents
 Feb 04 20:38:45 task-queue: Processing interval: 10s
 Feb 04 20:38:45 task-queue: Processing loop started (no auto-scanning)
 Feb 04 20:38:55 task-queue: Cycle 1 started at 2026-02-04T20:38:55.110539

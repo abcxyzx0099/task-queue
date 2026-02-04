@@ -18,8 +18,8 @@ from task_queue.atomic import AtomicFileWriter
 
 
 # Paths relative to project root
-task_specifications_path = "tasks/task-specifications"
-task_worker_reports_path = "tasks/task-worker-reports"
+task_specifications_path = "tasks/task-documents"
+task_worker_reports_path = "tasks/task-reports"
 task_archive_path = "tasks/task-archive"
 
 
@@ -153,7 +153,7 @@ Execute task at: {relative_task_path}
                         result.completed_at = datetime.now().isoformat()
                         result.duration_seconds = (datetime.now() - start_time).total_seconds()
                         result.stdout = "\n".join(full_output) if full_output else ""
-                        result.worker_report_path = f"tasks/task-worker-reports/{task_id}/"
+                        result.worker_report_path = f"tasks/task-reports/{task_id}/"
 
                         # Extract usage info
                         worker_output = {}
