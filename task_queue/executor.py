@@ -18,8 +18,8 @@ from task_queue.atomic import AtomicFileWriter
 
 
 # Paths relative to project root
-task_specifications_path = "tasks/task-documents"
-task_worker_reports_path = "tasks/task-reports"
+task_documents_path = "tasks/task-documents"
+task_reports_path = "tasks/task-reports"
 task_archive_path = "tasks/task-archive"
 
 
@@ -47,10 +47,10 @@ class TaskExecutor:
         self.project_root = Path(project_root).resolve()
 
         # Source directories
-        self.specs_dir = self.project_root / task_specifications_path
+        self.specs_dir = self.project_root / task_documents_path
 
         # Output directories
-        self.reports_dir = self.project_root / task_worker_reports_path
+        self.reports_dir = self.project_root / task_reports_path
         self.results_dir = self.project_root / "tasks" / "task-queue" / "results"
         self.archive_dir = self.project_root / task_archive_path
 
