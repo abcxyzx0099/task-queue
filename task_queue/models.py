@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class TaskStatus(str, Enum):
@@ -83,8 +83,7 @@ class TaskResult(BaseModel):
     attempts: int = 1
     error: Optional[str] = None
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class Statistics(BaseModel):
