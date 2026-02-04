@@ -1,0 +1,3 @@
+[console_scripts]
+task-queue = task_queue.cli:main
+task-queue-daemon = task_queue.daemon:main

@@ -11,7 +11,7 @@ PROJECT_ROOT = Path("/home/admin/workspaces/datachat")
 MONITOR_SYSTEM_ROOT = Path("/home/admin/workspaces/task-monitor")
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(MONITOR_SYSTEM_ROOT))
-from task_monitor.models import TaskResult, TaskStatus
+from task_queue.models import TaskResult, TaskStatus
 
 # Task monitor path relative to project root (e.g., "tasks/task-monitor")
 task_monitor_path = "tasks/task-monitor"

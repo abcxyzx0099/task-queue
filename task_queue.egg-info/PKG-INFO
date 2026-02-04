@@ -1,3 +1,29 @@
+Metadata-Version: 2.4
+Name: task-queue
+Version: 1.0.0
+Summary: Task queue system for Claude Agent SDK execution
+Author: DataChat Project
+License: MIT
+Project-URL: Homepage, https://github.com/datachat/task-queue
+Project-URL: Repository, https://github.com/datachat/task-queue
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: claude-agent-sdk>=0.1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+
 # Task Queue
 
 A task monitoring and execution system that processes task specifications using the Claude Agent SDK. Designed for single-project workflows with multiple task specification directories.

@@ -1,0 +1,23 @@
+[Unit]
+Description=Task Monitor Daemon
+Documentation=https://github.com/datachat/task-monitor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/admin/workspaces/task-monitor/.venv/bin/task-monitor-daemon
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=task-monitor
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

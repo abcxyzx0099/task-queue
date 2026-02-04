@@ -1,11 +1,170 @@
 Metadata-Version: 2.4
 Name: task-monitor
 Version: 1.0.0
-Summary: Multi-project task monitoring system with Claude Agent SDK integration
-Requires-Python: >=3.10
-Requires-Dist: watchdog>=5.0.0
+Summary: Multi-project parallel task monitoring system
+Author: DataChat Project
+License: MIT
+Project-URL: Homepage, https://github.com/datachat/task-monitor
+Project-URL: Repository, https://github.com/datachat/task-monitor
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
 Requires-Dist: pydantic>=2.0.0
+Requires-Dist: anthropic>=0.60.0
 Provides-Extra: dev
-Requires-Dist: pytest>=8.0.0; extra == "dev"
-Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"
-Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: ruff>=0.1.0; extra == "dev"
+
+# Task Monitor
+
+Multi-project parallel task monitoring system for autonomous task execution.
+
+## Features
+
+- **Auto-scanning**: Automatically discovers task specifications
+- **Multi-project parallel**: Process multiple projects simultaneously
+- **Sequential queues**: Tasks within each project execute in order
+- **Atomic state**: Safe concurrent access with file locking
+- **Claude Agent SDK**: Executes tasks via `/task-worker` skill
+
+## Installation
+
+```bash
+cd /home/admin/workspaces/task-monitor
+pip install -e .
+```
+
+## Quick Start
+
+### 1. Add a project to monitor
+
+```bash
+task-monitor project add /home/admin/workspaces/datachat --id datachat
+```
+
+### 2. List configured projects
+
+```bash
+task-monitor project list
+```
+
+### 3. Run a single monitoring cycle
+
+```bash
+task-monitor run --cycles 1
+```
+
+### 4. Start the background daemon
+
+```bash
+systemctl --user enable task-monitor
+systemctl --user start task-monitor
+```
+
+### 5. Check status
+
+```bash
+task-monitor status
+task-monitor queue
+```
+
+## CLI Commands
+
+### Project Management
+
+```bash
+task-monitor project add <path> [--id <id>] [--priority <n>]
+task-monitor project list [--all]
+task-monitor project remove <project_id>
+task-monitor project enable <project_id> [--disable]
+```
+
+### Monitor Control
+
+```bash
+task-monitor status [-v]              # Show system status
+task-monitor queue [project_id]       # Show queue status
+task-monitor scan                     # Trigger immediate scan
+task-monitor process [projects...]    # Trigger immediate processing
+```
+
+### Interactive Mode
+
+```bash
+task-monitor run [--cycles N]    # Run monitor (N cycles or infinite)
+```
+
+## Configuration
+
+Configuration is stored in `~/.config/task-monitor/config.json`:
+
+```json
+{
+  "version": "1.0",
+  "settings": {
+    "scan_interval": 30,
+    "max_concurrent_projects": 3,
+    "task_spec_pattern": "task-*.md",
+    "enable_file_hash": true
+  },
+  "projects": [
+    {
+      "project_id": "datachat",
+      "project_path": "/home/admin/workspaces/datachat",
+      "enabled": true,
+      "priority": 0
+    }
+  ]
+}
+```
+
+## Task Specification Format
+
+Task specifications follow the naming convention:
+```
+task-YYYYMMDD-HHMMSS-description.md
+```
+
+Example: `task-20260204-120000-fix-auth-timeout.md`
+
+## Directory Structure
+
+```
+{project-root}/
+├── tasks/
+│   ├── task-specifications/    # Task specifications (source)
+│   ├── task-monitor/           # Monitor-managed directory
+│   │   ├── state/              # Per-project state files
+│   │   └── results/            # Execution result JSONs
+│   └── task-worker-reports/    # Worker execution reports
+```
+
+## Daemon Service
+
+The monitor runs as a systemd user service:
+
+```bash
+# Enable at login
+systemctl --user enable task-monitor
+
+# Start/stop/restart
+systemctl --user start task-monitor
+systemctl --user stop task-monitor
+systemctl --user restart task-monitor
+
+# View logs
+journalctl --user -u task-monitor -f
+```
+
+## License
+
+MIT

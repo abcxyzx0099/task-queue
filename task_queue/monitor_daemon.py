@@ -14,8 +14,8 @@ from watchdog.events import FileSystemEventHandler
 MONITOR_SYSTEM_ROOT = Path("/home/admin/workspaces/task-monitor")
 sys.path.insert(0, str(MONITOR_SYSTEM_ROOT))
 
-from task_monitor.task_executor import TaskExecutor
-from task_monitor.models import TaskStatus
+from task_queue.task_executor import TaskExecutor
+from task_queue.models import TaskStatus
 
 # Configuration
 # Task monitor path relative to project root (e.g., "tasks/task-monitor")

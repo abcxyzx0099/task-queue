@@ -1,35 +1,74 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "task-monitor"
+name = "task-queue"
 version = "1.0.0"
-description = "Multi-project task monitoring system with Claude Agent SDK integration"
-requires-python = ">=3.10"
+description = "Task queue system for Claude Agent SDK execution"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "DataChat Project"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
-    "watchdog>=5.0.0",
     "pydantic>=2.0.0",
-    "python-dotenv>=1.0.0",
+    "claude-agent-sdk>=0.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
 ]
 
 [project.scripts]
-task-monitor = "task_monitor.cli:main"
+task-queue = "task_queue.cli:main"
+task-queue-daemon = "task_queue.daemon:main"
 
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+[project.urls]
+Homepage = "https://github.com/datachat/task-queue"
+Repository = "https://github.com/datachat/task-queue"
 
-[tool.setuptools.packages.find]
-where = ["."]
+[tool.setuptools]
+packages = ["task_queue"]
+
+[tool.setuptools.package-data]
+task_queue = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312", "py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
-addopts = "-v --tb=short"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

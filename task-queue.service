@@ -1,0 +1,23 @@
+[Unit]
+Description=Task Queue Daemon
+Documentation=https://github.com/datachat/task-queue
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/admin/workspaces/task-queue/.venv/bin/task-queue-daemon
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=task-queue
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
