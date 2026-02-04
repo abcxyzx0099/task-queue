@@ -229,16 +229,14 @@ Configuration file: `~/.config/task-queue/config.json`
 ```
 ~/.config/task-queue/          # Configuration directory
 ├── config.json                  # Main configuration
-├── state/                       # State directory
-│   └── queue_state.json        # Task queue state
-└── results/                     # Execution results
+└── state/                       # State directory
+    └── queue_state.json        # Task queue state
 
 {project-root}/                  # Your project directory
 └── tasks/
     ├── task-documents/     # Task specification sources
     ├── task-archive/            # Completed task specs
-    ├── task-queue/            # Monitor-managed directory
-    │   └── results/            # Per-project results (if used)
+    ├── task-queue/            # Result JSON files (flat)
     └── task-reports/     # Worker execution reports
 ```
 
@@ -385,7 +383,7 @@ Each task is executed using a two-agent workflow via the `/task-worker` skill:
 
 ### Result Files
 
-Results are saved in `~/.config/task-queue/results/`:
+Results are saved in `tasks/task-queue/` (in project root):
 
 ```json
 {
@@ -435,7 +433,7 @@ task-queue load
 task-queue queue
 
 # Check result file
-cat ~/.config/task-queue/results/task-<id>.json
+cat tasks/task-queue/task-<id>.json
 
 # View daemon logs
 journalctl --user -u task-queue -n 50

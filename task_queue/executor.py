@@ -51,7 +51,7 @@ class TaskExecutor:
 
         # Output directories
         self.reports_dir = self.project_root / task_reports_path
-        self.results_dir = self.project_root / "tasks" / "task-queue" / "results"
+        self.results_dir = self.project_root / "tasks" / "task-queue"
         self.archive_dir = self.project_root / task_archive_path
 
         # Create directories

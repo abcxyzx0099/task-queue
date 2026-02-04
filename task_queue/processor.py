@@ -30,7 +30,6 @@ class TaskProcessor:
         self,
         project_path: str,
         state_file: Path,
-        results_dir: Path,
         scanner: Optional[TaskScanner] = None
     ):
         """
@@ -39,17 +38,14 @@ class TaskProcessor:
         Args:
             project_path: Path to project root (used as cwd)
             state_file: Path to queue state file
-            results_dir: Path to results directory
             scanner: Task scanner (optional, for auto-discovery)
         """
         self.project_path = Path(project_path).resolve()
         self.state_file = Path(state_file)
-        self.results_dir = Path(results_dir)
         self.scanner = scanner or TaskScanner()
 
         # Create directories
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
 
         # Create archive directory
         self.archive_dir = self.project_path / "tasks" / "task-archive"

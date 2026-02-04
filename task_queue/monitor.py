@@ -15,7 +15,6 @@ from task_queue.models import (
 from task_queue.config import ConfigManager
 from task_queue.scanner import TaskScanner
 from task_queue.processor import TaskProcessor
-from task_queue.atomic import FileLock
 
 
 class TaskQueue:
@@ -59,17 +58,14 @@ class TaskQueue:
             # Define paths (in ~/.config/task-queue/)
             config_dir = self.config_manager.config_file.parent
             state_dir = config_dir / "state"
-            results_dir = config_dir / "results"
 
             state_dir.mkdir(parents=True, exist_ok=True)
-            results_dir.mkdir(parents=True, exist_ok=True)
 
             state_file = state_dir / "queue_state.json"
 
             self._processor = TaskProcessor(
                 project_path=project_path,
                 state_file=state_file,
-                results_dir=results_dir,
                 scanner=self.scanner
             )
 
