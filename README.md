@@ -235,14 +235,14 @@ Configuration file: `~/.config/task-queue/config.json`
 
 {project-root}/                  # Your project directory
 └── tasks/
-    ├── task-specifications/     # Task specification sources
+    ├── task-documents/     # Task specification sources
     ├── task-archive/            # Completed task specs
     ├── task-queue/            # Monitor-managed directory
     │   └── results/            # Per-project results (if used)
     └── task-reports/     # Worker execution reports
 ```
 
-## Task Specification Format
+## Task Document Format
 
 ### Naming Convention
 
@@ -390,7 +390,7 @@ Results are saved in `~/.config/task-queue/results/`:
 ```json
 {
   "task_id": "task-20260204-120000-example",
-  "spec_file": "/path/to/task-specification.md",
+  "spec_file": "/path/to/task-document.md",
   "spec_dir_id": "main",
   "status": "completed",
   "started_at": "2026-02-04T12:00:00.000000",
