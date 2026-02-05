@@ -26,6 +26,12 @@ from task_queue.watchdog import WatchdogManager
 from task_queue.models import TaskSourceDirectory
 
 
+# Worker timeouts
+WORKER_KEEPALIVE_TIMEOUT = 60  # seconds
+WORKER_RETRY_DELAY = 10  # seconds
+WORKER_CYCLE_PAUSE = 0.1  # seconds
+
+
 # Configure logging
 log_format = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(
@@ -242,7 +248,7 @@ class TaskQueueDaemon:
                 target=self._worker_loop,
                 args=(source_dir,),
                 name=f"Worker-{source_dir.id}",
-                daemon=True
+                daemon=False  # Non-daemon threads keep the process running
             )
 
             with self._worker_lock:
@@ -253,7 +259,7 @@ class TaskQueueDaemon:
 
         # Wait for all workers to complete
         for source_id, worker in list(self._worker_threads.items()):
-            worker.join(timeout=1.0)
+            worker.join()
 
         logger.info("All worker threads stopped")
 
@@ -305,21 +311,21 @@ class TaskQueueDaemon:
                 else:
                     # No pending tasks in this source
                     logger.info(f"[{source_dir.id}] No pending tasks, waiting for watchdog events...")
-                    # Wait for watchdog event (60 second timeout for keep-alive check)
-                    source_event.wait(timeout=60)
+                    # Wait for watchdog event (keep-alive timeout)
+                    source_event.wait(timeout=WORKER_KEEPALIVE_TIMEOUT)
                     # Event was set (task added) or timeout (keep-alive check)
 
                 logger.info(f"[{source_dir.id}] Cycle {cycle} completed")
 
                 # Brief pause before next cycle
-                time.sleep(0.1)
+                time.sleep(WORKER_CYCLE_PAUSE)
 
             except Exception as e:
                 logger.error(f"[{source_dir.id}] Error in processing cycle: {e}", exc_info=True)
 
                 # Wait before retry
-                logger.info(f"[{source_dir.id}] Waiting 10s before retry...")
-                source_event.wait(timeout=10)
+                logger.info(f"[{source_dir.id}] Waiting {WORKER_RETRY_DELAY}s before retry...")
+                source_event.wait(timeout=WORKER_RETRY_DELAY)
 
         logger.info(f"[{source_dir.id}] Worker stopped")
 

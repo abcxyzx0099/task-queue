@@ -7,11 +7,13 @@ No Task model - just execute task document files.
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass, field
 
+from dotenv import load_dotenv
 from claude_agent_sdk import query, ClaudeAgentOptions
 
 
@@ -20,6 +22,15 @@ logging.basicConfig(
     format='%(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file at module import time
+_ENV_PATH = Path("/home/admin/workspaces/task-queue/.env")
+load_dotenv(_ENV_PATH, override=True)
+
+# Verify environment variables are loaded
+_ANTHROPIC_AUTH_TOKEN = os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+_ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "")
+logger.info(f"Executor initialized: Auth token loaded={bool(_ANTHROPIC_AUTH_TOKEN)}, Base URL loaded={bool(_ANTHROPIC_BASE_URL)}")
 
 
 @dataclass
@@ -86,6 +97,19 @@ class SyncTaskExecutor:
         task_complete = False
         full_output = []
 
+        # Collect stderr output for debugging
+        stderr_output = []
+
+        def stderr_callback(line: str):
+            stderr_output.append(line)
+            logger.info(f"[{task_id}] STDERR: {line}")
+
+        logger.info(f"[{task_id}] Using auth token from .env: {bool(_ANTHROPIC_AUTH_TOKEN)}, Base URL: {bool(_ANTHROPIC_BASE_URL)}")
+
+        # Set environment variables for the subprocess (will be inherited by bundled CLI)
+        os.environ["ANTHROPIC_AUTH_TOKEN"] = _ANTHROPIC_AUTH_TOKEN
+        os.environ["ANTHROPIC_BASE_URL"] = _ANTHROPIC_BASE_URL
+
         try:
             # Configure SDK with system_prompt to enforce coordinator behavior
             options = ClaudeAgentOptions(
@@ -93,6 +117,8 @@ class SyncTaskExecutor:
                 permission_mode="bypassPermissions",
                 setting_sources=["project"],
                 tools={"type": "preset", "preset": "claude_code"},
+                stderr=stderr_callback,
+                extra_args={"debug-to-stderr": True},
                 # CRITICAL: Force coordinator-only behavior - no direct implementation
                 system_prompt="""You are a TASK COORDINATOR. Your ONLY job is to coordinate work through sub-agents using the Task tool.
 
@@ -169,8 +195,9 @@ Execute task at: {relative_task_path}
         except Exception as e:
             if not task_complete:
                 result.success = False
-                result.error = f"{type(e).__name__}: {str(e)}"
-                logger.error(f"[{task_id}] Task exception: {result.error}")
+                stderr_str = "\n".join(stderr_output) if stderr_output else ""
+                result.error = f"{type(e).__name__}: {str(e)}\nSTDERR:\n{stderr_str}"
+                logger.error(f"[{task_id}] Task exception: {type(e).__name__}: {str(e)}")
 
         return result
 
