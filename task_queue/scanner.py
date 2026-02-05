@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
-from task_queue.models import DiscoveredTask, TaskDocDirectory
+from task_queue.models import DiscoveredTask, TaskSourceDirectory
 
 
 class TaskScanner:
     """
-    Scans directories for task document files.
+    Scans Task Source Directories for Task Document files.
 
     Auto-discovers task-*.md files and tracks them by file hash
     for change detection.
@@ -28,60 +28,70 @@ class TaskScanner:
         """
         self.enable_file_hash = enable_file_hash
 
-    def scan_task_doc_directory(self, doc_dir: TaskDocDirectory) -> List[DiscoveredTask]:
+    def scan_task_source_directory(self, source_dir: TaskSourceDirectory) -> List[DiscoveredTask]:
         """
-        Scan a single task doc directory for task documents.
+        Scan a single Task Source Directory for Task Documents.
 
         Args:
-            doc_dir: Task doc directory configuration
+            source_dir: Task Source Directory configuration
 
         Returns:
             List of discovered tasks
         """
         discovered = []
-        doc_path = Path(doc_dir.path)
+        source_path = Path(source_dir.path)
 
-        if not doc_path.exists():
+        if not source_path.exists():
             return discovered
 
         # Find all task-*.md files
-        for filepath in self._find_task_files(doc_path):
-            task = self._create_discovered_task(filepath, doc_dir.id)
+        for filepath in self._find_task_files(source_path):
+            task = self._create_discovered_task(filepath, source_dir.id)
             if task:
                 discovered.append(task)
 
         return discovered
 
-    def scan_task_doc_directories(self, doc_dirs: List[TaskDocDirectory]) -> List[DiscoveredTask]:
+    def scan_task_source_directories(self, source_dirs: List[TaskSourceDirectory]) -> List[DiscoveredTask]:
         """
-        Scan multiple task doc directories for task documents.
+        Scan multiple Task Source Directories for Task Documents.
 
         Args:
-            doc_dirs: List of task doc directory configurations
+            source_dirs: List of Task Source Directory configurations
 
         Returns:
             List of discovered tasks from all directories
         """
         discovered = []
 
-        for doc_dir in doc_dirs:
-            discovered.extend(self.scan_task_doc_directory(doc_dir))
+        for source_dir in source_dirs:
+            discovered.extend(self.scan_task_source_directory(source_dir))
 
         return discovered
 
-    def _find_task_files(self, doc_dir: Path) -> List[Path]:
+    # Backward compatibility aliases
+
+    def scan_task_doc_directory(self, doc_dir: TaskSourceDirectory) -> List[DiscoveredTask]:
+        """Scan a task doc directory (deprecated, use scan_task_source_directory)."""
+        return self.scan_task_source_directory(doc_dir)
+
+    def scan_task_doc_directories(self, doc_dirs: List[TaskSourceDirectory]) -> List[DiscoveredTask]:
+        """Scan task doc directories (deprecated, use scan_task_source_directories)."""
+        return self.scan_task_source_directories(doc_dirs)
+
+    def _find_task_files(self, source_dir: Path) -> List[Path]:
         """
-        Find all task document files in directory.
+        Find all Task Document files in Task Source Directory.
 
         Args:
-            doc_dir: Directory to scan
+            source_dir: Task Source Directory to scan
 
         Returns:
             List of task file paths
         """
         task_files = []
 
-        for filepath in doc_dir.glob("task-*.md"):
+        for filepath in source_dir.glob("task-*.md"):
             if filepath.is_file():
                 task_files.append(filepath)
 
@@ -96,8 +106,8 @@ class TaskScanner:
         Create a DiscoveredTask from a file path.
 
         Args:
-            filepath: Path to task document file
-            task_doc_dir_id: ID of the task doc directory
+            filepath: Path to Task Document file
+            task_doc_dir_id: ID of the Task Source Directory
 
         Returns:
             DiscoveredTask or None if invalid
@@ -207,6 +217,43 @@ class TaskScanner:
         Returns:
             True if file is modified or hash is unknown
         """
+        if not self.enable_file_hash:
+            return False
+
+        if known_hash is None:
+            return True
+
+        current_hash = self._calculate_hash(filepath)
+
+        return current_hash != known_hash
+
+    def get_file_modification_time(self, filepath: Path) -> Optional[str]:
+        """
+        Get file modification time as ISO format string.
+
+        Args:
+            filepath: File to check
+
+        Returns:
+            ISO format modification time or None if error
+        """
+        try:
+            mtime = filepath.stat().st_mtime
+            return datetime.fromtimestamp(mtime).isoformat()
+        except OSError:
+            return None
+
+    def calculate_hash(self, filepath: Path) -> str:
+        """
+        Public method to calculate MD5 hash of file.
+
+        Args:
+            filepath: File to hash
+
+        Returns:
+            Hexadecimal hash string
+        """
+        return self._calculate_hash(filepath)
         if not self.enable_file_hash:
             return False
 

@@ -1,7 +1,7 @@
 """
-Task monitor for processing.
+Task queue monitor for per-source processing.
 
-Orchestrates task loading and execution.
+Orchestrates task loading and execution with watchdog support.
 """
 
 import time
@@ -10,7 +10,8 @@ from typing import Optional, Dict, List
 from datetime import datetime
 
 from task_queue.models import (
-    QueueConfig, SystemStatus, TaskDocDirectoryStatus
+    QueueConfig, SystemStatus, TaskSourceDirectory,
+    TaskSourceDirectoryStatus, TaskSource
 )
 from task_queue.config import ConfigManager
 from task_queue.scanner import TaskScanner
@@ -19,10 +20,10 @@ from task_queue.processor import TaskProcessor
 
 class TaskQueue:
     """
-    Task monitor for single project path.
+    Task queue for per-source processing.
 
-    Manages task loading from multiple task doc directories
-    and sequential execution.
+    Manages task loading from multiple Task Source Directories
+    with per-source queues and round-robin execution.
     """
 
     def __init__(
@@ -30,7 +31,7 @@ class TaskQueue:
         config_manager: Optional[ConfigManager] = None
     ):
         """
-        Initialize monitor.
+        Initialize task queue.
 
         Args:
             config_manager: Configuration manager (creates default if None)
@@ -49,9 +50,9 @@ class TaskQueue:
 
     def get_processor(self) -> Optional[TaskProcessor]:
         """Get or create task processor."""
-        project_path = self.config_manager.config.project_path
+        project_workspace = self.config_manager.config.project_workspace
 
-        if not project_path:
+        if not project_workspace:
             return None
 
         if self._processor is None:
@@ -64,7 +65,7 @@ class TaskQueue:
             state_file = state_dir / "queue_state.json"
 
             self._processor = TaskProcessor(
-                project_path=project_path,
+                project_workspace=project_workspace,
                 state_file=state_file,
                 scanner=self.scanner
             )
@@ -73,37 +74,189 @@ class TaskQueue:
 
     def load_tasks(self) -> Dict[str, int]:
         """
-        Load tasks from configured task doc directories.
+        Load tasks from configured Task Source Directories.
 
         Returns:
-            Dict mapping task_doc_dir_id to new task count
+            Dict mapping source_id to new task count
         """
         processor = self.get_processor()
 
         if not processor:
-            print("⚠️  No project path set. Use 'task-queue' set-project <path>'")
+            print("⚠️  No Project Workspace set. Use 'task-queue load <task-source-dir> <project-workspace>'")
             return {}
 
-        print(f"\n📂 Scanning task doc directories...")
+        source_dirs = self.config_manager.config.task_source_directories
 
-        doc_dirs = self.config_manager.config.task_doc_directories
-
-        if not doc_dirs:
-            print("⚠️  No task doc directories configured. Use 'task-queue' add-doc <path>'")
+        if not source_dirs:
+            print("⚠️  No Task Source Directories configured")
             return {}
 
-        for doc_dir in doc_dirs:
-            print(f"  - {doc_dir.id}: {doc_dir.path}")
+        print(f"\n📂 Scanning Task Source Directories...")
+
+        for source_dir in source_dirs:
+            print(f"  - {source_dir.id}: {source_dir.path}")
 
         print()
 
-        # Load tasks (processor scans all task doc directories)
-        new_count = processor.load_tasks(doc_dirs)
+        # Load tasks (processor scans all Task Source Directories)
+        new_count = processor.load_tasks(source_dirs, source=TaskSource.LOAD)
 
         self._load_count += 1
         self._last_load = datetime.now()
 
         return {"total": new_count}
+
+    def load_single_task(
+        self,
+        task_doc_file: str,
+        task_source_dir: str,
+        project_workspace: str
+    ) -> bool:
+        """
+        Load a single Task Document.
+
+        Args:
+            task_doc_file: Path to Task Document file
+            task_source_dir: Task Source Directory ID
+            project_workspace: Project Workspace path
+
+        Returns:
+            True if loaded successfully
+        """
+        # Set project workspace if provided
+        if project_workspace:
+            try:
+                self.config_manager.set_project_workspace(project_workspace)
+            except Exception as e:
+                print(f"❌ Error setting Project Workspace: {e}")
+                return False
+
+        processor = self.get_processor()
+
+        if not processor:
+            print("⚠️  No Project Workspace set")
+            return False
+
+        # Register source directory if needed
+        source_dir = self.config_manager.get_task_source_directory(task_source_dir)
+        if not source_dir:
+            # Auto-register source directory
+            source_path = str(Path(task_doc_file).parent)
+            try:
+                source_dir = self.config_manager.add_task_source_directory(
+                    path=source_path,
+                    id=task_source_dir,
+                    description=f"Auto-registered for {task_doc_file}"
+                )
+                print(f"✅ Registered Task Source Directory '{task_source_dir}': {source_path}")
+            except Exception as e:
+                print(f"❌ Error registering source directory: {e}")
+                return False
+
+        # Load single task
+        result = processor.load_single_task(
+            task_doc_file=task_doc_file,
+            source_id=task_source_dir,
+            source=TaskSource.MANUAL
+        )
+
+        if result:
+            self._load_count += 1
+            self._last_load = datetime.now()
+
+        return result
+
+    def reload_source(
+        self,
+        task_source_dir: str,
+        project_workspace: str
+    ) -> int:
+        """
+        Force re-scan a Task Source Directory.
+
+        Args:
+            task_source_dir: Task Source Directory ID or path
+            project_workspace: Project Workspace path
+
+        Returns:
+            Number of tasks (re)loaded
+        """
+        # Set project workspace
+        try:
+            self.config_manager.set_project_workspace(project_workspace)
+        except Exception as e:
+            print(f"❌ Error setting Project Workspace: {e}")
+            return 0
+
+        processor = self.get_processor()
+
+        if not processor:
+            print("⚠️  No Project Workspace set")
+            return 0
+
+        # Get source directory
+        source_dir = self.config_manager.get_task_source_directory(task_source_dir)
+
+        if not source_dir:
+            # Try path as a directory
+            source_path = Path(task_source_dir)
+            if not source_path.exists():
+                print(f"❌ Task Source Directory not found: {task_source_dir}")
+                return 0
+
+            # Create temporary source for scanning
+            source_dir = TaskSourceDirectory(
+                id="<temp>",
+                path=str(source_path)
+            )
+
+        print(f"\n📂 Reloading tasks from: {source_dir.path}")
+
+        # Scan and load
+        discovered = self.scanner.scan_task_source_directory(source_dir)
+
+        loaded_count = 0
+        for task in discovered:
+            if processor.load_single_task(
+                str(task.task_doc_file),
+                task_source_dir,
+                source=TaskSource.RELOAD
+            ):
+                loaded_count += 1
+
+        if loaded_count > 0:
+            self._load_count += 1
+            self._last_load = datetime.now()
+            print(f"✅ Reloaded {loaded_count} tasks")
+        else:
+            print(f"📭 No tasks found")
+
+        return loaded_count
+
+    def unload_source(self, task_source_dir: str) -> int:
+        """
+        Remove ALL tasks from a Task Source Directory.
+
+        Args:
+            task_source_dir: Task Source Directory ID
+
+        Returns:
+            Number of tasks removed
+        """
+        processor = self.get_processor()
+
+        if not processor:
+            print("⚠️  No processor available")
+            return 0
+
+        removed_count = processor.unload_source(task_source_dir)
+
+        if removed_count > 0:
+            print(f"✅ Removed {removed_count} tasks from '{task_source_dir}'")
+        else:
+            print(f"⚠️  No tasks found for '{task_source_dir}'")
+
+        return removed_count
 
     def process_tasks(self, max_tasks: Optional[int] = None) -> dict:
         """
@@ -120,7 +273,7 @@ class TaskQueue:
         if not processor:
             return {
                 "status": "error",
-                "error": "No project path configured"
+                "error": "No Project Workspace configured"
             }
 
         print(f"\n🔧 Processing tasks...")
@@ -168,7 +321,7 @@ class TaskQueue:
 
     def run(self, cycles: Optional[int] = None) -> None:
         """
-        Run the monitor loop.
+        Run the task queue loop.
 
         Args:
             cycles: Number of cycles to run (None = infinite)
@@ -176,12 +329,9 @@ class TaskQueue:
         self._running = True
         self._start_time = datetime.now()
 
-        processing_interval = self.config_manager.config.settings.processing_interval
-
         print(f"\n🎯 Task Queue Started")
-        print(f"   Project: {self.config_manager.config.project_path}")
-        print(f"   Task doc directories: {len(self.config_manager.config.task_doc_directories)}")
-        print(f"   Interval: {processing_interval}s")
+        print(f"   Project Workspace: {self.config_manager.config.project_workspace}")
+        print(f"   Task Source Directories: {len(self.config_manager.config.task_source_directories)}")
         print(f"   Cycles: {'infinite' if cycles is None else cycles}")
 
         cycle = 0
@@ -200,9 +350,11 @@ class TaskQueue:
                 if cycles is not None and cycle >= cycles:
                     break
 
-                # Wait for next cycle
-                print(f"\n⏱️  Waiting {processing_interval}s...")
-                time.sleep(processing_interval)
+                # Check if there are more tasks
+                processor = self.get_processor()
+                if processor and processor.state.get_total_pending_count() == 0:
+                    print(f"\n📭 No more pending tasks")
+                    break
 
         except KeyboardInterrupt:
             print("\n\n⚠️  Interrupted by user")
@@ -212,7 +364,7 @@ class TaskQueue:
             print(f"\n🛑 Task Queue Stopped")
 
     def stop(self) -> None:
-        """Stop the monitor."""
+        """Stop the task queue."""
         self._running = False
 
     def get_status(self) -> SystemStatus:
@@ -228,11 +380,12 @@ class TaskQueue:
         status.last_load_at = self._last_load.isoformat() if self._last_load else None
 
         # Project info
-        status.project_path = self.config_manager.config.project_path
+        status.project_workspace = self.config_manager.config.project_workspace
 
-        # Task doc directories
-        status.total_task_doc_dirs = len(self.config_manager.config.task_doc_directories)
-        status.active_task_doc_dirs = len(self.config_manager.config.task_doc_directories)
+        # Task Source Directories
+        source_dirs = self.config_manager.config.task_source_directories
+        status.total_task_source_dirs = len(source_dirs)
+        status.active_task_source_dirs = len(source_dirs)
 
         # Queue stats
         processor = self.get_processor()
@@ -247,25 +400,30 @@ class TaskQueue:
 
         return status
 
-    def get_task_doc_directory_status(self) -> List[TaskDocDirectoryStatus]:
-        """Get status for all task doc directories."""
+    def get_task_source_directory_status(self) -> List[TaskSourceDirectoryStatus]:
+        """Get status for all Task Source Directories."""
         statuses = []
 
-        for doc_dir in self.config_manager.config.task_doc_directories:
+        processor = self.get_processor()
+
+        for source_dir in self.config_manager.config.task_source_directories:
             queue_stats = {}
 
-            # Count tasks from this task doc directory
-            processor = self.get_processor()
+            # Count tasks from this Task Source Directory
             if processor:
-                for task in processor.state.queue:
-                    if task.task_doc_dir_id == doc_dir.id:
-                        st = task.status.value
-                        queue_stats[st] = queue_stats.get(st, 0) + 1
+                source_state = processor.get_source_state(source_dir.id)
+                if source_state:
+                    queue_stats = {
+                        "pending": source_state.get_pending_count(),
+                        "running": source_state.get_running_count(),
+                        "completed": source_state.get_completed_count(),
+                        "failed": source_state.get_failed_count(),
+                    }
 
-            statuses.append(TaskDocDirectoryStatus(
-                id=doc_dir.id,
-                path=doc_dir.path,
-                description=doc_dir.description,
+            statuses.append(TaskSourceDirectoryStatus(
+                id=source_dir.id,
+                path=source_dir.path,
+                description=source_dir.description,
                 queue_stats=queue_stats
             ))
 
@@ -276,7 +434,7 @@ def create_queue(
     config_file: Optional[Path] = None
 ) -> TaskQueue:
     """
-    Create a configured monitor.
+    Create a configured task queue.
 
     Args:
         config_file: Path to configuration file

@@ -1,34 +1,44 @@
 """
-Task processor for sequential execution.
+Task processor for per-source sequential execution.
 
-Handles task queue and execution for a single project path.
+Handles task queue and execution with per-source architecture:
+- Each Task Source Directory has its own queue
+- Tasks within same source execute sequentially (FIFO)
+- Tasks from different sources can execute in parallel
+- Source Coordinator provides round-robin scheduling
 """
 
 import shutil
+import socket
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 from datetime import datetime
+from threading import Lock
 
 from task_queue.models import (
-    Task, TaskStatus, QueueState, Statistics,
-    DiscoveredTask, ProcessingState
+    Task, TaskStatus, TaskSource,
+    QueueState, SourceState, SourceProcessingState,
+    SourceStatistics, DiscoveredTask, TaskSourceDirectory
 )
 from task_queue.atomic import AtomicFileWriter, FileLock
 from task_queue.scanner import TaskScanner
 from task_queue.executor import SyncTaskExecutor
+from task_queue.coordinator import SourceCoordinator
 
 
 class TaskProcessor:
     """
-    Sequential task processor.
+    Per-source task processor.
 
-    Manages a FIFO queue of tasks and executes them one at a time
-    using the Claude Agent SDK.
+    Manages multiple task queues (one per Task Source Directory) with:
+    - Sequential execution within each source
+    - Parallel execution across sources
+    - Round-robin coordinator for fair scheduling
     """
 
     def __init__(
         self,
-        project_path: str,
+        project_workspace: str,
         state_file: Path,
         scanner: Optional[TaskScanner] = None
     ):
@@ -36,11 +46,11 @@ class TaskProcessor:
         Initialize task processor.
 
         Args:
-            project_path: Path to project root (used as cwd)
+            project_workspace: Path to project root (used as cwd for SDK execution)
             state_file: Path to queue state file
             scanner: Task scanner (optional, for auto-discovery)
         """
-        self.project_path = Path(project_path).resolve()
+        self.project_workspace = Path(project_workspace).resolve()
         self.state_file = Path(state_file)
         self.scanner = scanner or TaskScanner()
 
@@ -48,113 +58,323 @@ class TaskProcessor:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Create archive directory
-        self.archive_dir = self.project_path / "tasks" / "task-archive"
+        self.archive_dir = self.project_workspace / "tasks" / "task-archive"
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
-        # Lock
-        self.lock = FileLock(self.state_file.with_suffix('.lock'))
+        # State file lock (for loading/saving state)
+        self.state_lock = FileLock(self.state_file.with_suffix('.lock'))
+
+        # Per-source locks (for thread-safe queue operations)
+        self._source_locks: Dict[str, Lock] = {}
 
         # Load state
         self.state = self._load_state()
 
+        # Create coordinator
+        self.coordinator = SourceCoordinator(self.state)
+
         # Create executor
-        self.executor = SyncTaskExecutor(self.project_path)
+        self.executor = SyncTaskExecutor(self.project_workspace)
+
+    def _get_source_lock(self, source_id: str) -> Lock:
+        """
+        Get or create lock for a specific source.
+
+        Args:
+            source_id: Source ID
+
+        Returns:
+            Lock for this source
+        """
+        if source_id not in self._source_locks:
+            self._source_locks[source_id] = Lock()
+
+        return self._source_locks[source_id]
 
     def _load_state(self) -> QueueState:
-        """Load queue state from disk."""
+        """Load queue state from disk with migration support."""
         data = AtomicFileWriter.read_json(self.state_file)
 
         if data is None:
             return self._create_default_state()
 
         try:
+            # Check version for migration
+            version = data.get("version", "1.0")
+
+            if version == "1.0":
+                # Migrate from v1.0 to v2.0
+                return self._migrate_state_v1_to_v2(data)
+
             return QueueState(**data)
         except Exception:
             return self._create_default_state()
 
+    def _migrate_state_v1_to_v2(self, v1_data: dict) -> QueueState:
+        """
+        Migrate state from version 1.0 to 2.0.
+
+        v1.0 had a single global queue. v2.0 has per-source queues.
+
+        Args:
+            v1_data: Version 1.0 state data
+
+        Returns:
+            Version 2.0 QueueState
+        """
+        # Get all tasks from v1.0 queue
+        old_queue = v1_data.get("queue", [])
+        old_statistics = v1_data.get("statistics", {})
+
+        # Create v2.0 state
+        v2_state = QueueState(version="2.0")
+
+        # Group tasks by source
+        source_tasks: Dict[str, List[Task]] = {}
+
+        for task_data in old_queue:
+            task = Task(**task_data)
+            source_id = task.task_doc_dir_id
+
+            if source_id not in source_tasks:
+                source_tasks[source_id] = []
+
+            source_tasks[source_id].append(task)
+
+        # Create source states
+        for source_id, tasks in source_tasks.items():
+            source_state = SourceState(
+                id=source_id,
+                path=f"<migrated>",  # Unknown path from migration
+                queue=tasks,
+                statistics=SourceStatistics(
+                    total_queued=len(tasks),
+                    total_completed=old_statistics.get("total_completed", 0),
+                    total_failed=old_statistics.get("total_failed", 0),
+                )
+            )
+
+            v2_state.sources[source_id] = source_state
+
+        # Initialize coordinator
+        v2_state.coordinator.source_order = list(source_tasks.keys())
+
+        return v2_state
+
     def _create_default_state(self) -> QueueState:
-        """Create default queue state."""
-        return QueueState(version="1.0")
+        """Create default queue state (v2.0)."""
+        return QueueState(version="2.0")
 
     def _save_state(self) -> None:
         """Save queue state atomically."""
         self.state.updated_at = datetime.now().isoformat()
         AtomicFileWriter.write_json(self.state_file, self.state.model_dump(), indent=2)
 
-    def load_tasks(self, doc_dirs: List) -> int:
+    def load_tasks(
+        self,
+        source_dirs: List[TaskSourceDirectory],
+        source: TaskSource = TaskSource.MANUAL
+    ) -> int:
         """
-        Scan task doc directories and add new tasks to queue.
+        Scan Task Source Directories and add new tasks to their respective queues.
 
         Args:
-            doc_dirs: List of TaskDocDirectory configurations
+            source_dirs: List of Task Source Directory configurations
+            source: How the tasks were discovered (MANUAL, WATCHDOG, RELOAD)
 
         Returns:
             Number of new tasks discovered
         """
-        # Scan all task doc directories
-        discovered = self.scanner.scan_task_doc_directories(doc_dirs)
+        # Scan all Task Source Directories
+        discovered = self.scanner.scan_task_source_directories(source_dirs)
 
         new_count = 0
 
         for task in discovered:
-            if self._add_to_queue(task):
+            if self._add_to_queue(task, source=source):
                 new_count += 1
 
         if new_count > 0:
-            self.state.statistics.last_load_at = datetime.now().isoformat()
+            # Update global statistics
+            self.state.global_statistics.last_load_at = datetime.now().isoformat()
+
+            # Save state
             self._save_state()
+
             print(f"  📥 Loaded {new_count} new tasks")
 
         return new_count
 
-    def _add_to_queue(self, discovered: DiscoveredTask) -> bool:
+    def _add_to_queue(
+        self,
+        discovered: DiscoveredTask,
+        source: TaskSource = TaskSource.MANUAL
+    ) -> bool:
         """
-        Add a discovered task to the queue.
+        Add a discovered task to the appropriate source queue.
 
         Args:
             discovered: Discovered task
+            source: How the task was discovered
 
         Returns:
             True if added, False if already exists
         """
-        # Check if task already exists in queue
-        for task in self.state.queue:
-            if task.task_id == discovered.task_id:
-                # Update file hash if changed
-                if self.scanner.is_file_modified(
-                    discovered.task_doc_file,
-                    task.file_hash
-                ):
-                    task.file_hash = discovered.file_hash
-                    task.file_size = discovered.file_size
-                    # Re-queue if was completed
-                    if task.status == TaskStatus.COMPLETED:
-                        task.status = TaskStatus.PENDING
-                        task.started_at = None
-                        task.completed_at = None
-                        task.error = None
-                        self._save_state()
-                        return True
-                return False
+        source_id = discovered.task_doc_dir_id
 
-        # Add new task to queue
-        task = Task(
-            task_id=discovered.task_id,
-            task_doc_file=str(discovered.task_doc_file),
-            task_doc_dir_id=discovered.task_doc_dir_id,
-            source="load",
-            file_hash=discovered.file_hash,
-            file_size=discovered.file_size
+        # Get or create source state
+        if source_id not in self.state.sources:
+            self.state.sources[source_id] = SourceState(
+                id=source_id,
+                path=str(discovered.task_doc_file.parent),
+                queue=[],
+                processing=SourceProcessingState(),
+                statistics=SourceStatistics()
+            )
+            # Add to coordinator order
+            self.coordinator.add_source(source_id)
+
+        source_state = self.state.sources[source_id]
+        source_lock = self._get_source_lock(source_id)
+
+        # Get file modification time
+        last_modified = self.scanner.get_file_modification_time(discovered.task_doc_file)
+
+        # Check if task already exists in queue
+        with source_lock:
+            for task in source_state.queue:
+                if task.task_id == discovered.task_id:
+                    # Update file info if changed
+                    if self.scanner.is_file_modified(
+                        discovered.task_doc_file,
+                        task.file_hash
+                    ):
+                        task.file_hash = discovered.file_hash
+                        task.file_size = discovered.file_size
+                        task.last_modified = last_modified
+
+                        # Re-queue if was completed
+                        if task.status == TaskStatus.COMPLETED:
+                            task.status = TaskStatus.PENDING
+                            task.started_at = None
+                            task.completed_at = None
+                            task.error = None
+                            task.source = source
+                            self._save_state()
+                            return True
+                    return False
+
+            # Add new task to source queue
+            task = Task(
+                task_id=discovered.task_id,
+                task_doc_file=str(discovered.task_doc_file),
+                task_doc_dir_id=discovered.task_doc_dir_id,
+                source=source,
+                file_hash=discovered.file_hash,
+                file_size=discovered.file_size,
+                last_modified=last_modified
+            )
+
+            source_state.queue.append(task)
+            source_state.statistics.total_queued += 1
+            source_state.updated_at = datetime.now().isoformat()
+
+            # Update global statistics
+            self.state.global_statistics.total_queued += 1
+
+            return True
+
+    def load_single_task(
+        self,
+        task_doc_file: str,
+        source_id: str,
+        source: TaskSource = TaskSource.MANUAL
+    ) -> bool:
+        """
+        Load a single Task Document into the queue.
+
+        Args:
+            task_doc_file: Path to Task Document file
+            source_id: Task Source Directory ID
+            source: How the task was discovered
+
+        Returns:
+            True if loaded, False if already exists
+        """
+        filepath = Path(task_doc_file)
+
+        # Validate task ID
+        task_id = filepath.stem
+        if not self._is_valid_task_id(task_id):
+            return False
+
+        # Create discovered task
+        file_size = 0
+        file_hash = None
+
+        try:
+            file_size = filepath.stat().st_size
+            if file_size > 0:
+                file_hash = self.scanner.calculate_hash(filepath)
+        except OSError:
+            return False
+
+        last_modified = self.scanner.get_file_modification_time(filepath)
+
+        discovered = DiscoveredTask(
+            task_id=task_id,
+            task_doc_file=filepath,
+            task_doc_dir_id=source_id,
+            file_hash=file_hash,
+            file_size=file_size,
+            discovered_at=datetime.now().isoformat()
         )
 
-        self.state.queue.append(task)
-        self.state.statistics.total_queued += 1
+        result = self._add_to_queue(discovered, source=source)
 
-        return True
+        if result:
+            self.state.global_statistics.last_load_at = datetime.now().isoformat()
+            self._save_state()
+
+        return result
+
+    def unload_source(self, source_id: str) -> int:
+        """
+        Remove ALL tasks from a Task Source Directory.
+
+        Cancels all pending/running tasks from this source.
+
+        Args:
+            source_id: Task Source Directory ID
+
+        Returns:
+            Number of tasks removed
+        """
+        if source_id not in self.state.sources:
+            return 0
+
+        source_state = self.state.sources[source_id]
+        source_lock = self._get_source_lock(source_id)
+
+        with source_lock:
+            removed_count = len(source_state.queue)
+
+            # Remove from coordinator
+            self.coordinator.remove_source(source_id)
+
+            # Remove from state
+            del self.state.sources[source_id]
+
+            # Update global counts
+            self.state.global_statistics.total_queued -= removed_count
+
+            self._save_state()
+
+            return removed_count
 
     def process_tasks(self, max_tasks: Optional[int] = None) -> dict:
         """
-        Process pending tasks sequentially.
+        Process pending tasks using round-robin across sources.
 
         Args:
             max_tasks: Maximum tasks to process (None = unlimited)
@@ -164,19 +384,20 @@ class TaskProcessor:
         """
         # Reload state from disk to get latest changes
         self.state = self._load_state()
+        self.coordinator = SourceCoordinator(self.state)
 
-        # Try to acquire lock
-        if not self.lock.acquire(timeout=0.5):
+        # Try to acquire state lock
+        if not self.state_lock.acquire(timeout=0.5):
             return {
                 "status": "skipped",
                 "reason": "locked"
             }
 
         try:
-            # Get pending tasks
-            pending = [t for t in self.state.queue if t.status == TaskStatus.PENDING]
+            # Check total pending tasks
+            total_pending = self.state.get_total_pending_count()
 
-            if not pending:
+            if total_pending == 0:
                 return {
                     "status": "empty",
                     "processed": 0,
@@ -184,27 +405,37 @@ class TaskProcessor:
                     "remaining": 0
                 }
 
-            # Limit batch size
-            if max_tasks:
-                pending = pending[:max_tasks]
-
-            print(f"  🔧 Processing {len(pending)} tasks")
+            print(f"  🔧 Processing {total_pending} tasks across {len(self.state.sources)} sources")
 
             processed = 0
             failed = 0
+            tasks_processed = 0
 
-            for task in pending:
-                if max_tasks and processed >= max_tasks:
+            # Process tasks using round-robin
+            while tasks_processed < max_tasks if max_tasks else True:
+                # Get next task using coordinator
+                result = self.coordinator.get_next_pending_task()
+
+                if result is None:
+                    # No more pending tasks
                     break
 
-                result = self._process_single_task(task)
+                task, source_id = result
 
-                if result == TaskStatus.COMPLETED:
+                # Process the task
+                status = self._process_single_task(task, source_id)
+
+                if status == TaskStatus.COMPLETED:
                     processed += 1
                 else:
                     failed += 1
 
-            remaining = len([t for t in self.state.queue if t.status == TaskStatus.PENDING])
+                tasks_processed += 1
+
+                # Check if source is complete
+                self.coordinator.mark_source_complete(source_id)
+
+            remaining = self.state.get_total_pending_count()
 
             return {
                 "status": "completed",
@@ -214,71 +445,83 @@ class TaskProcessor:
             }
 
         finally:
-            self.lock.release()
+            self.state_lock.release()
 
-    def _process_single_task(self, task: Task) -> TaskStatus:
+    def _process_single_task(self, task: Task, source_id: str) -> TaskStatus:
         """
-        Process a single task.
+        Process a single task from a specific source.
 
         Args:
             task: Task to process
+            source_id: Source ID for this task
 
         Returns:
             Final task status
         """
-        # Update state to running
-        task.status = TaskStatus.RUNNING
-        task.started_at = datetime.now().isoformat()
-        task.attempts += 1
+        source_state = self.state.sources[source_id]
+        source_lock = self._get_source_lock(source_id)
 
-        # Update processing state
-        self.state.processing = ProcessingState(
-            is_processing=True,
-            current_task=task.task_id,
-            process_id=None,
-            started_at=task.started_at,
-            hostname=None
-        )
+        with source_lock:
+            # Update task to running
+            task.status = TaskStatus.RUNNING
+            task.started_at = datetime.now().isoformat()
+            task.attempts += 1
 
-        self._save_state()
+            # Update source processing state
+            source_state.processing = SourceProcessingState(
+                is_processing=True,
+                current_task=task.task_id,
+                process_id=None,
+                started_at=task.started_at,
+                hostname=socket.gethostname()
+            )
+
+            self._save_state()
 
         try:
             # Execute task
-            result = self.executor.execute(task, project_root=self.project_path)
+            result = self.executor.execute(task, project_root=self.project_workspace)
 
-            # Update task with result
-            task.status = result.status
-            task.completed_at = result.completed_at
-            task.error = result.error
+            with source_lock:
+                # Update task with result
+                task.status = result.status
+                task.completed_at = result.completed_at
+                task.error = result.error
 
-            # Update statistics
-            if result.status == TaskStatus.COMPLETED:
-                self.state.statistics.total_completed += 1
-            else:
-                self.state.statistics.total_failed += 1
+                # Update source statistics
+                if result.status == TaskStatus.COMPLETED:
+                    source_state.statistics.total_completed += 1
+                    self.state.global_statistics.total_completed += 1
+                else:
+                    source_state.statistics.total_failed += 1
+                    self.state.global_statistics.total_failed += 1
 
-            self.state.statistics.last_processed_at = result.completed_at
+                source_state.statistics.last_processed_at = result.completed_at
 
-            # Archive completed task doc
-            if result.status == TaskStatus.COMPLETED:
-                self._archive_task_doc(task)
+                # Archive completed task doc
+                if result.status == TaskStatus.COMPLETED:
+                    self._archive_task_doc(task)
 
         except Exception as e:
-            task.status = TaskStatus.FAILED
-            task.completed_at = datetime.now().isoformat()
-            task.error = str(e)
-            self.state.statistics.total_failed += 1
+            with source_lock:
+                task.status = TaskStatus.FAILED
+                task.completed_at = datetime.now().isoformat()
+                task.error = str(e)
+                source_state.statistics.total_failed += 1
+                self.state.global_statistics.total_failed += 1
 
         finally:
-            # Clear processing state
-            self.state.processing = ProcessingState()
-            self._save_state()
+            with source_lock:
+                # Clear source processing state
+                source_state.processing = SourceProcessingState()
+                source_state.updated_at = datetime.now().isoformat()
+                self._save_state()
 
         return task.status
 
     def _archive_task_doc(self, task: Task) -> None:
         """
-        Move completed task doc to archive.
+        Move completed Task Document to archive.
 
         Args:
             task: Completed task
@@ -299,51 +542,62 @@ class TaskProcessor:
     def get_status(self) -> dict:
         """Get current status."""
         return {
-            "project_path": str(self.project_path),
+            "project_workspace": str(self.project_workspace),
+            "version": self.state.version,
+            "total_sources": len(self.state.sources),
             "queue_stats": {
-                "total": len(self.state.queue),
-                "pending": self.state.get_pending_count(),
-                "running": self.state.get_running_count(),
-                "completed": self.state.get_completed_count(),
-                "failed": self.state.get_failed_count()
+                "total": sum(len(s.queue) for s in self.state.sources.values()),
+                "pending": self.state.get_total_pending_count(),
+                "running": self.state.get_total_running_count(),
+                "completed": self.state.get_total_completed_count(),
+                "failed": self.state.get_total_failed_count(),
             },
-            "is_processing": self.state.processing.is_processing,
-            "current_task": self.state.processing.current_task,
-            "statistics": self.state.statistics.model_dump()
+            "global_statistics": self.state.global_statistics.model_dump(),
+            "coordinator": self.coordinator.get_statistics(),
+            "sources": self.coordinator.get_source_status(),
         }
 
-    def get_queue(self) -> List[Task]:
-        """Get all tasks in queue."""
-        return self.state.queue.copy()
+    def get_source_state(self, source_id: str) -> Optional[SourceState]:
+        """Get state for a specific source."""
+        return self.state.sources.get(source_id)
 
-    def clear_completed(self, older_than_days: int = 7) -> int:
+    def get_all_source_states(self) -> Dict[str, SourceState]:
+        """Get all source states."""
+        return self.state.sources.copy()
+
+    def _is_valid_task_id(self, task_id: str) -> bool:
         """
-        Remove completed tasks from queue.
+        Validate task ID format.
+
+        Expected format: task-YYYYMMDD-HHMMSS-description
 
         Args:
-            older_than_days: Only remove tasks completed more than this many days ago
+            task_id: Task ID to validate
 
         Returns:
-            Number of tasks removed
+            True if valid format
         """
-        from datetime import timedelta
+        if not task_id.startswith("task-"):
+            return False
 
-        cutoff = datetime.now() - timedelta(days=older_than_days)
-        removed = 0
+        # Remove "task-" prefix
+        rest = task_id[5:]
 
-        new_queue = []
+        # Check for timestamp pattern (YYYYMMDD-HHMMSS)
+        parts = rest.split("-", 2)
 
-        for task in self.state.queue:
-            if task.status == TaskStatus.COMPLETED:
-                if task.completed_at:
-                    completed_dt = datetime.fromisoformat(task.completed_at)
-                    if completed_dt < cutoff:
-                        removed += 1
-                        continue
+        if len(parts) < 2:
+            return False
 
-            new_queue.append(task)
+        date_part = parts[0]
+        time_part = parts[1]
 
-        self.state.queue = new_queue
-        self._save_state()
+        # Validate date (8 digits)
+        if len(date_part) != 8 or not date_part.isdigit():
+            return False
 
-        return removed
+        # Validate time (6 digits)
+        if len(time_part) != 6 or not time_part.isdigit():
+            return False
+
+        return True

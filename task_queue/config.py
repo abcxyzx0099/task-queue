@@ -7,7 +7,7 @@ Handles loading, saving, and updating queue configuration.
 from pathlib import Path
 from typing import Optional, List
 
-from task_queue.models import QueueConfig, TaskDocDirectory
+from task_queue.models import QueueConfig, TaskSourceDirectory
 from task_queue.atomic import AtomicFileWriter, FileLock
 
 
@@ -18,7 +18,7 @@ DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.json"
 
 class ConfigManager:
     """
-    Manages task monitor configuration.
+    Manages task queue configuration.
 
     Handles loading configuration from disk, making updates,
     and persisting changes atomically.
@@ -72,11 +72,11 @@ class ConfigManager:
         """Reload configuration from disk."""
         self.config = self._load_config()
 
-    # Project path management
+    # Project workspace management
 
-    def set_project_path(self, path: str) -> None:
+    def set_project_workspace(self, path: str) -> None:
         """
-        Set the project path (replaces any existing path).
+        Set the project workspace (replaces any existing path).
 
         Args:
             path: Path to project root directory
@@ -84,77 +84,105 @@ class ConfigManager:
         Raises:
             ValueError: If path doesn't exist or is not a directory
         """
-        self.config.set_project_path(path)
+        self.config.set_project_workspace(path)
         self.save_config()
+
+    def get_project_workspace(self) -> Optional[str]:
+        """Get the current project workspace path."""
+        return self.config.project_workspace
+
+    # Backward compatibility aliases (old names)
+
+    def set_project_path(self, path: str) -> None:
+        """Set the project path (deprecated, use set_project_workspace)."""
+        self.set_project_workspace(path)
 
     def get_project_path(self) -> Optional[str]:
-        """Get the current project path."""
-        return self.config.project_path
+        """Get the current project path (deprecated, use get_project_workspace)."""
+        return self.get_project_workspace()
 
     def clear_project_path(self) -> None:
-        """Clear the project path."""
-        self.config.project_path = None
+        """Clear the project workspace path."""
+        self.config.project_workspace = None
         self.save_config()
 
-    # Task doc directory management
+    # Task Source Directory management
 
-    def add_task_doc_directory(
+    def add_task_source_directory(
         self,
         path: str,
         id: str,
         description: str = ""
-    ) -> TaskDocDirectory:
+    ) -> TaskSourceDirectory:
         """
-        Add a task doc directory to monitor.
+        Add a Task Source Directory to monitor.
 
         Args:
-            path: Path to task document directory
-            id: Unique identifier for this task doc directory
+            path: Path to Task Source Directory
+            id: Unique identifier for this Task Source Directory
             description: Optional description
 
         Returns:
-            The created TaskDocDirectory
+            The created TaskSourceDirectory
 
         Raises:
             ValueError: If path doesn't exist or ID already exists
         """
-        doc_dir = self.config.add_task_doc_directory(
+        source_dir = self.config.add_task_source_directory(
             path=path,
             id=id,
             description=description
         )
         self.save_config()
-        return doc_dir
+        return source_dir
 
-    def remove_task_doc_directory(self, doc_id: str) -> bool:
+    def remove_task_source_directory(self, source_id: str) -> bool:
         """
-        Remove a task doc directory from monitoring.
+        Remove a Task Source Directory from monitoring.
 
         Args:
-            doc_id: Task doc directory ID to remove
+            source_id: Task Source Directory ID to remove
 
         Returns:
             True if removed, False if not found
         """
-        result = self.config.remove_task_doc_directory(doc_id)
+        result = self.config.remove_task_source_directory(source_id)
 
         if result:
             self.save_config()
 
         return result
 
-    def list_task_doc_directories(self) -> List[TaskDocDirectory]:
+    def list_task_source_directories(self) -> List[TaskSourceDirectory]:
         """
-        List configured task doc directories.
+        List configured Task Source Directories.
 
         Returns:
-            List of task doc directories
+            List of Task Source Directories
         """
-        return self.config.task_doc_directories
+        return self.config.task_source_directories
 
-    def get_task_doc_directory(self, doc_id: str) -> Optional[TaskDocDirectory]:
-        """Get task doc directory by ID."""
-        return self.config.get_task_doc_directory(doc_id)
+    def get_task_source_directory(self, source_id: str) -> Optional[TaskSourceDirectory]:
+        """Get Task Source Directory by ID."""
+        return self.config.get_task_source_directory(source_id)
+
+    # Backward compatibility aliases (old names)
+
+    def add_task_doc_directory(self, path: str, id: str, description: str = "") -> TaskSourceDirectory:
+        """Add a task doc directory (deprecated, use add_task_source_directory)."""
+        return self.add_task_source_directory(path, id, description)
+
+    def remove_task_doc_directory(self, doc_id: str) -> bool:
+        """Remove a task doc directory (deprecated, use remove_task_source_directory)."""
+        return self.remove_task_source_directory(doc_id)
+
+    def list_task_doc_directories(self) -> List[TaskSourceDirectory]:
+        """List task doc directories (deprecated, use list_task_source_directories)."""
+        return self.list_task_source_directories()
+
+    def get_task_doc_directory(self, doc_id: str) -> Optional[TaskSourceDirectory]:
+        """Get task doc directory by ID (deprecated, use get_task_source_directory)."""
+        return self.get_task_source_directory(doc_id)
 
     # Settings management
 
@@ -163,7 +191,7 @@ class ConfigManager:
         Update global monitor settings.
 
         Args:
-            **kwargs: Settings to update
+            **kwargs: Settings to update (watch_enabled, watch_debounce_ms, etc.)
         """
         for key, value in kwargs.items():
             if hasattr(self.config.settings, key):
