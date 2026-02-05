@@ -1,26 +1,18 @@
 """
 Task executor using Claude Agent SDK.
 
-Copied from task-management module for consistent SDK usage.
+Simplified for directory-based state architecture.
+No Task model - just execute task document files.
 """
 
 import asyncio
 import logging
-import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from dataclasses import dataclass, field
 
 from claude_agent_sdk import query, ClaudeAgentOptions
-
-from task_queue.models import Task, TaskResult, TaskStatus
-from task_queue.atomic import AtomicFileWriter
-
-
-# Paths relative to project root
-task_documents_path = "tasks/task-documents"
-task_reports_path = "tasks/task-reports"
-task_archive_path = "tasks/task-archive"
 
 
 logging.basicConfig(
@@ -30,70 +22,79 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class TaskExecutor:
-    """
-    Executes tasks using Claude Agent SDK - invokes /task-worker skill.
+@dataclass
+class ExecutionResult:
+    """Result of task execution."""
+    success: bool
+    output: str = ""
+    error: str = ""
+    task_id: str = ""
 
-    Copied from task-management module for consistent behavior.
+
+class SyncTaskExecutor:
+    """
+    Synchronous task executor using Claude Agent SDK.
+
+    Simplified for directory-based state - executes task files directly.
     """
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Optional[Path] = None):
         """
-        Initialize executor for a project.
+        Initialize sync executor.
 
         Args:
-            project_root: Path to project root directory
+            project_root: Path to project root directory (can be overridden in execute())
         """
-        self.project_root = Path(project_root).resolve()
+        self.project_root = Path(project_root).resolve() if project_root else None
 
-        # Source directories
-        self.task_docs_dir = self.project_root / task_documents_path
-
-        # Output directories
-        self.reports_dir = self.project_root / task_reports_path
-        self.results_dir = self.project_root / "tasks" / "task-queue"
-        self.archive_dir = self.project_root / task_archive_path
-
-        # Create directories
-        self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        self.archive_dir.mkdir(parents=True, exist_ok=True)
-
-    async def execute_task(self, task: Task) -> TaskResult:
+    def execute(self, task_file: Path, project_root: Path = None) -> ExecutionResult:
         """
-        Execute a task by invoking /task-worker skill.
+        Execute a task synchronously.
 
         Args:
-            task: Task to execute
+            task_file: Path to task document file
+            project_root: Project root directory
 
         Returns:
-            TaskResult with execution outcome
+            ExecutionResult with execution outcome
         """
-        task_id = task.task_id
+        if project_root:
+            self.project_root = Path(project_root).resolve()
 
-        # Get task doc path
-        if Path(task.task_doc_file).is_absolute:
-            task_path = Path(task.task_doc_file)
-        else:
-            task_path = self.project_root / task.task_doc_file
+        if not self.project_root:
+            raise ValueError("project_root must be set")
 
-        if not task_path.exists():
-            raise FileNotFoundError(f"Task document not found: {task_path}")
+        task_file = Path(task_file)
+        if not task_file.is_absolute():
+            task_file = self.project_root / task_file
 
-        # Calculate relative path from project root
-        relative_task_path = task_path.relative_to(self.project_root)
+        if not task_file.exists():
+            raise FileNotFoundError(f"Task document not found: {task_file}")
+
+        task_id = task_file.stem
+        relative_task_path = task_file.relative_to(self.project_root)
 
         logger.info(f"[{task_id}] Task started")
         logger.info(f"[{task_id}] Task doc: {relative_task_path}")
 
-        # Configure SDK with system_prompt to enforce coordinator behavior
-        options = ClaudeAgentOptions(
-            cwd=str(self.project_root),
-            permission_mode="bypassPermissions",
-            setting_sources=["project"],
-            tools={"type": "preset", "preset": "claude_code"},
-            # CRITICAL: Force coordinator-only behavior - no direct implementation
-            system_prompt="""You are a TASK COORDINATOR. Your ONLY job is to coordinate work through sub-agents using the Task tool.
+        result = ExecutionResult(
+            success=False,
+            task_id=task_id
+        )
+
+        start_time = datetime.now()
+        task_complete = False
+        full_output = []
+
+        try:
+            # Configure SDK with system_prompt to enforce coordinator behavior
+            options = ClaudeAgentOptions(
+                cwd=str(self.project_root),
+                permission_mode="bypassPermissions",
+                setting_sources=["project"],
+                tools={"type": "preset", "preset": "claude_code"},
+                # CRITICAL: Force coordinator-only behavior - no direct implementation
+                system_prompt="""You are a TASK COORDINATOR. Your ONLY job is to coordinate work through sub-agents using the Task tool.
 
 CRITICAL RULES:
 1. You are FORBIDDEN from doing any implementation work yourself
@@ -115,24 +116,8 @@ Your workflow for the task-worker skill:
 
 You MUST use the Task tool for ALL implementation. DO NOT take shortcuts.
 """,
-        )
+            )
 
-        start_time = datetime.now()
-        result = TaskResult(
-            task_id=task_id,
-            task_doc_file=str(task_path),
-            task_doc_dir_id=task.task_doc_dir_id,
-            status=TaskStatus.RUNNING,
-            started_at=start_time.isoformat(),
-            completed_at=None,
-            duration_seconds=0.0,
-            attempts=task.attempts + 1,
-        )
-
-        task_complete = False
-        full_output = []
-
-        try:
             # Invoke /task-worker skill with task document path
             q = query(
                 prompt=f"""/task-worker
@@ -142,133 +127,50 @@ Execute task at: {relative_task_path}
                 options=options
             )
 
-            # Consume all messages
-            async for message in q:
-                if task_complete:
-                    continue
+            # Run async query in new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                async def consume_messages():
+                    nonlocal task_complete, full_output
+                    async for message in q:
+                        if task_complete:
+                            continue
 
-                if hasattr(message, 'subtype'):
-                    if message.subtype == 'success':
-                        result.status = TaskStatus.COMPLETED
-                        result.completed_at = datetime.now().isoformat()
-                        result.duration_seconds = (datetime.now() - start_time).total_seconds()
-                        result.stdout = "\n".join(full_output) if full_output else ""
-                        result.worker_report_path = f"tasks/task-reports/{task_id}/"
+                        if hasattr(message, 'subtype'):
+                            if message.subtype == 'success':
+                                result.success = True
+                                result.output = "\n".join(full_output) if full_output else ""
+                                duration = (datetime.now() - start_time).total_seconds()
+                                logger.info(f"[{task_id}] Task completed in {duration:.1f}s")
+                                task_complete = True
 
-                        # Extract usage info
-                        worker_output = {}
-                        worker_output["summary"] = message.result or "Task completed"
-                        worker_output["raw_output"] = result.stdout
+                            elif message.subtype == 'error':
+                                result.success = False
+                                result.error = message.result or "Task failed"
+                                logger.error(f"[{task_id}] Task failed: {result.error}")
+                                task_complete = True
+                        else:
+                            if hasattr(message, 'content'):
+                                for block in message.content:
+                                    if hasattr(block, 'text'):
+                                        full_output.append(block.text)
 
-                        if hasattr(message, 'usage'):
-                            worker_output['usage'] = message.usage
-                        if hasattr(message, 'total_cost_usd'):
-                            worker_output['cost_usd'] = message.total_cost_usd
-                            result.cost_usd = message.total_cost_usd
-
-                        logger.info(f"[{task_id}] Task completed in {result.duration_seconds:.1f}s")
-                        task_complete = True
-
-                    elif message.subtype == 'error':
-                        result.status = TaskStatus.FAILED
-                        result.completed_at = datetime.now().isoformat()
-                        result.duration_seconds = (datetime.now() - start_time).total_seconds()
-                        result.stdout = "\n".join(full_output) if full_output else ""
-                        result.stderr = message.result or "Task failed"
-                        result.error = result.stderr
-                        logger.error(f"[{task_id}] Task failed: {result.error}")
-                        task_complete = True
-                else:
-                    if hasattr(message, 'content'):
-                        for block in message.content:
-                            if hasattr(block, 'text'):
-                                full_output.append(block.text)
-
-            # Save result
-            self._save_result(result)
-
-            # Archive task document
-            self._archive_task_doc(task_path)
+                loop.run_until_complete(consume_messages())
+            finally:
+                loop.close()
 
         except asyncio.CancelledError:
             logger.info(f"[{task_id}] Task cancelled")
             if not task_complete:
-                result.status = TaskStatus.FAILED
-                result.completed_at = datetime.now().isoformat()
-                result.duration_seconds = (datetime.now() - start_time).total_seconds()
+                result.success = False
                 result.error = "Task cancelled"
-                self._save_result(result)
-                self._archive_task_doc(task_path)
-            raise
 
         except Exception as e:
             if not task_complete:
-                result.status = TaskStatus.FAILED
-                result.completed_at = datetime.now().isoformat()
-                result.duration_seconds = (datetime.now() - start_time).total_seconds()
+                result.success = False
                 result.error = f"{type(e).__name__}: {str(e)}"
                 logger.error(f"[{task_id}] Task exception: {result.error}")
-                self._save_result(result)
-                self._archive_task_doc(task_path)
-
-        return result
-
-    def _save_result(self, result: TaskResult):
-        """Save result to JSON file."""
-        output_file = self.results_dir / f"{result.task_id}.json"
-        AtomicFileWriter.write_json(
-            output_file,
-            result.model_dump(),
-            indent=2
-        )
-        logger.info(f"[{result.task_id}] Result saved: {output_file}")
-
-    def _archive_task_doc(self, task_path: Path):
-        """Move completed task document to archive."""
-        if task_path.exists():
-            # Get just the filename
-            task_file = task_path.name
-            dest_path = self.archive_dir / task_file
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(task_path), str(dest_path))
-            logger.info(f"[{task_file}] Archived to: {dest_path}")
-
-
-# Synchronous wrapper for compatibility
-class SyncTaskExecutor:
-    """
-    Synchronous wrapper for TaskExecutor.
-
-    Provides a sync execute() method that runs the async execute_task().
-    """
-
-    def __init__(self, project_root: Path):
-        """Initialize sync executor."""
-        self._executor = TaskExecutor(project_root)
-        self.project_root = project_root
-
-    def execute(self, task: Task, project_root: Path = None, state_dir: Path = None) -> TaskResult:
-        """
-        Execute a task synchronously.
-
-        Args:
-            task: Task to execute
-            project_root: Project root (uses init path if None)
-            state_dir: Ignored (for compatibility)
-
-        Returns:
-            TaskResult with execution outcome
-        """
-        if project_root:
-            self._executor = TaskExecutor(project_root)
-
-        # Run async function in event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(self._executor.execute_task(task))
-        finally:
-            loop.close()
 
         return result
 

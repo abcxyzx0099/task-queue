@@ -17,6 +17,7 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: pydantic>=2.0.0
 Requires-Dist: claude-agent-sdk>=0.1.0
+Requires-Dist: watchdog>=4.0.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
@@ -26,42 +27,53 @@ Requires-Dist: ruff>=0.1.0; extra == "dev"
 
 # Task Queue
 
-A task monitoring and execution system that processes task specifications using the Claude Agent SDK. Designed for single-project workflows with multiple task specification directories.
+A task monitoring and execution system that processes task specifications using the Claude Agent SDK. Features event-driven file monitoring with per-source queue architecture.
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Task Queue System                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────┐         ┌──────────────┐                  │
-│  │   Project   │         │ Spec Dirs    │                  │
-│  │   (single)  │────────▶│ (multiple)   │                  │
-│  │  /datachat  │         │ - main       │                  │
-│  └─────────────┘         │ - experimental│              │
-│                          └──────────────┘                  │
-│                                   │                         │
-│                                   ▼                         │
-│                          ┌──────────────┐                  │
-│                          │ Task Scanner │                  │
-│                          │ (task-*.md)  │                  │
-│                          └──────────────┘                  │
-│                                   │                         │
-│                                   ▼                         │
-│                          ┌──────────────┐                  │
-│                          │    Queue     │                  │
-│                          │  (FIFO)      │                  │
-│                          └──────────────┘                  │
-│                                   │                         │
-│                                   ▼                         │
-│                          ┌──────────────┐                  │
-│                          │   Executor   │                  │
-│                          │ Claude SDK   │                  │
-│                          │ /task-worker │                  │
-│                          └──────────────┘                  │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         Task Queue System                        │
+│                     v2.0 - Per-Source Queues                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐   │
+│   │ Source A Handler   │  │ Source B Handler   │  │ Source C Handler   │   │
+│   │                    │  │                    │  │                    │   │
+│   │ Watch: tasks/a/    │  │ Watch: tasks/b/    │  │ Watch: tasks/c/    │   │
+│   │                    │  │                    │  │                    │   │
+│   │ ┌──────────────┐  │  │ ┌──────────────┐  │  │ ┌──────────────┐  │   │
+│   │ │ Queue (FIFO) │  │  │ │ Queue (FIFO) │  │  │ │ Queue (FIFO) │  │   │
+│   │ │              │  │  │ │              │  │  │ │              │  │   │
+│   │ │ task-a1      │  │  │ │ task-b1      │  │  │ │ task-c1      │  │   │
+│   │ │ task-a2      │  │  │ │ task-b2      │  │  │ │ task-c2      │  │   │
+│   │ └──────────────┘  │  │ └──────────────┘  │  │ └──────────────┘  │   │
+│   │        │           │  │        │           │  │        │           │   │
+│   │        ▼           │  │        ▼           │  │        ▼           │   │
+│   │   Sequential One   │  │   Sequential One   │  │   Sequential One   │   │
+│   │   at a Time       │  │   at a Time       │  │   at a Time       │   │
+│   └────────────────────┘  └────────────────────┘  └────────────────────┘   │
+│                                                                  │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │               Source Coordinator (Round-Robin)                │   │
+│   │                                                            │   │
+│   │   Execute A-1 → Switch to B → Execute B-1 → Switch to C... │   │
+│   └────────────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│   ┌─────────────────────────────────────────────────────────────┐    │
+│   │                 Project Workspace (single)                  │    │
+│   │                 /home/admin/workspaces/datachat            │    │
+│   └─────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+## Key Concepts
+
+| Concept | Term | Definition |
+|---------|------|------------|
+| **1** | **Task Source Directory** | A folder containing task document files. Watched for file changes. |
+| **2** | **Task Document** | Individual task specification file (e.g., `task-YYYYMMDD-HHMMSS-description.md`). |
+| **3** | **Project Workspace** | The working directory where Claude Agent SDK executes. |
 
 ## Features
 
@@ -69,16 +81,23 @@ A task monitoring and execution system that processes task specifications using 
 
 | Feature | Description |
 |---------|-------------|
-| **Single Project Path** | One project path serves as the working directory for all tasks |
-| **Multiple Spec Directories** | Configure multiple task specification sources with add/remove |
-| **Manual Load Trigger** | No auto-scanning by daemon; explicit `load` command required |
-| **Sequential FIFO Execution** | Tasks execute in first-in-first-out order |
-| **Multiple Loads Supported** | Run `load` command multiple times even while processing |
+| **Event-Driven** | Watchdog detects file changes instantly (no polling delay) |
+| **Per-Source Queues** | Each Task Source Directory has its own queue and lock |
+| **Sequential Within Source** | Tasks from same source execute one at a time (FIFO) |
+| **Parallel Across Sources** | Different sources can execute simultaneously |
+| **Round-Robin Coordinator** | Fair scheduling across all sources |
+| **Auto-Load on Create** | Watchdog auto-loads new Task Documents |
+| **Manual Load/Reload** | Explicit control via `load` and `reload` commands |
+| **Unload by Source** | Remove all tasks from a specific source |
 | **Atomic State Persistence** | Safe concurrent access with atomic file operations |
-| **File Locking** | Prevents duplicate processing with fcntl-based locks |
-| **Claude Agent SDK Integration** | Executes tasks via `/task-worker` skill with two-agent workflow |
+| **Claude Agent SDK Integration** | Executes tasks via `/task-worker` skill |
 | **Daemon Service** | Runs as systemd user service for continuous processing |
-| **Task Archiving** | Completed task specs moved to archive directory |
+
+### Execution Model
+
+**Same source:** Sequential FIFO (task-a1 → task-a2 → task-a3)
+
+**Different sources:** Parallel (A-1 and B-1 can run simultaneously)
 
 ### Safety Features
 
@@ -112,95 +131,73 @@ systemctl --user enable task-queue
 
 ## Quick Start
 
-### 1. Set the project path
+### 1. Load tasks from a Task Source Directory
 
 ```bash
-task-queue set-project /home/admin/workspaces/datachat
-# Output: ✅ Project path set: /home/admin/workspaces/datachat
+task-queue load --task-source-dir tasks/task-documents --project-workspace /home/admin/workspaces/datachat --source-id main
+# Output: ✅ Registered Task Source Directory 'main': tasks/task-documents
+#         ✅ Loaded 1 new tasks
 ```
 
-### 2. Add a spec directory
+### 2. Create a Task Document
 
-```bash
-task-queue add-spec /home/admin/workspaces/datachat/tasks/task-documents --id main
-# Output: ✅ Added spec directory: main
-```
-
-### 3. Create a task specification
-
-Create a file in your spec directory following the naming pattern:
+Create a file in your Task Source Directory following the naming pattern:
 ```
 task-YYYYMMDD-HHMMSS-description.md
 ```
 
-Example: `task-20260204-120000-fix-auth-timeout.md`
+Example: `task-20260205-100000-fix-auth-timeout.md`
 
-### 4. Load tasks
+The watchdog will auto-detect and load the new task immediately.
+
+### 3. Check status
 
 ```bash
-task-queue load
-# Output: 📥 Loaded 1 new tasks
+task-queue status
 ```
 
-### 5. Process tasks (manual or daemon)
+### 4. Process tasks
 
 ```bash
 # Manual processing
 task-queue process
 
-# Or start the daemon
+# Or start the daemon (with watchdog auto-loading)
 systemctl --user start task-queue
 ```
 
 ## CLI Commands
 
-### Project Management
-
-```bash
-# Set project path
-task-queue set-project <path>
-
-# Clear project path
-task-queue clear-project
-
-# Show current project
-task-queue show-project
-```
-
-### Spec Directory Management
-
-```bash
-# Add a spec directory
-task-queue add-spec <path> --id <id> [--description "desc"]
-
-# Remove a spec directory
-task-queue remove-spec <id>
-
-# List spec directories
-task-queue list-specs
-```
-
 ### Task Operations
 
 ```bash
-# Load tasks from spec directories
-task-queue load
+# Load tasks from Task Source Directory
+task-queue load --task-source-dir <path> --project-workspace <path> --source-id <id>
+
+# Load a single Task Document
+task-queue load --task-source-dir tasks/task-documents/task-001.md --project-workspace /home/admin/workspaces/datachat --source-id main
+
+# Force re-scan a Task Source Directory
+task-queue reload --task-source-dir <source-id-or-path> --project-workspace <path>
+
+# Remove ALL tasks from a Task Source Directory
+task-queue unload --source-id <source-id>
 
 # Process pending tasks
 task-queue process [--max-tasks N]
-
-# Show queue status
-task-queue queue
 ```
 
-### Status & Monitoring
+### Monitoring
 
 ```bash
 # Show system status
 task-queue status [-v]
 
-# Show detailed spec directory status
-task-queue status --verbose
+# Show queue status
+task-queue queue
+
+# List Task Source Directories
+task-queue list-sources
 ```
 
 ### Interactive Mode
@@ -219,24 +216,26 @@ Configuration file: `~/.config/task-queue/config.json`
 ```json
 {
   "version": "1.0",
-  "settings": {
-    "processing_interval": 10,
-    "batch_size": 10,
-    "task_spec_pattern": "task-*.md",
-    "max_attempts": 3,
-    "enable_file_hash": true
-  },
-  "project_path": "/home/admin/workspaces/datachat",
-  "spec_directories": [
+  "project_workspace": "/home/admin/workspaces/datachat",
+  "task_source_directories": [
     {
       "id": "main",
       "path": "/home/admin/workspaces/datachat/tasks/task-documents",
-      "description": "Main task specifications",
-      "added_at": "2026-02-04T12:00:00.000000"
+      "description": "Main Task Source Directory",
+      "added_at": "2026-02-05T10:00:00.000000"
     }
   ],
-  "created_at": "2026-02-04T12:00:00.000000",
-  "updated_at": "2026-02-04T12:00:00.000000"
+  "settings": {
+    "watch_enabled": true,
+    "watch_debounce_ms": 500,
+    "watch_patterns": ["task-*.md"],
+    "watch_recursive": false,
+    "task_pattern": "task-*.md",
+    "max_attempts": 3,
+    "enable_file_hash": true
+  },
+  "created_at": "2026-02-05T10:00:00.000000",
+  "updated_at": "2026-02-05T10:00:00.000000"
 }
 ```
 
@@ -244,11 +243,70 @@ Configuration file: `~/.config/task-queue/config.json`
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `processing_interval` | 10 | Seconds between daemon processing cycles |
-| `batch_size` | 10 | Max tasks to process per cycle |
-| `task_spec_pattern` | `task-*.md` | Glob pattern for task files |
+| `watch_enabled` | true | Enable watchdog for file system events |
+| `watch_debounce_ms` | 500 | Debounce delay in milliseconds for file events |
+| `watch_patterns` | ["task-*.md"] | File patterns to watch |
+| `watch_recursive` | false | Watch subdirectories |
+| `task_pattern` | "task-*.md" | Pattern for task document files |
 | `max_attempts` | 3 | Max execution attempts per task |
 | `enable_file_hash` | true | Track file hashes for change detection |
+
+## State Structure
+
+### Queue State (v2.0)
+
+State file: `~/.config/task-queue/state/queue_state.json`
+
+```json
+{
+  "version": "2.0",
+  "sources": {
+    "main": {
+      "id": "main",
+      "path": "/path/to/source",
+      "queue": [
+        {
+          "task_id": "task-20260205-100000-test",
+          "task_doc_file": "/path/to/task.md",
+          "task_doc_dir_id": "main",
+          "status": "pending",
+          "source": "watchdog",
+          "attempts": 0
+        }
+      ],
+      "processing": {
+        "is_processing": false,
+        "current_task": null,
+        "process_id": null,
+        "started_at": null,
+        "hostname": null
+      },
+      "statistics": {
+        "total_queued": 1,
+        "total_completed": 0,
+        "total_failed": 0,
+        "last_processed_at": null,
+        "last_loaded_at": "2026-02-05T10:00:00.000000"
+      },
+      "updated_at": "2026-02-05T10:00:00.000000"
+    }
+  },
+  "coordinator": {
+    "current_source": "main",
+    "last_switch": "2026-02-05T10:00:00.000000",
+    "source_order": ["main", "experimental"],
+    "updated_at": "2026-02-05T10:00:00.000000"
+  },
+  "global_statistics": {
+    "total_sources": 2,
+    "total_queued": 5,
+    "total_completed": 3,
+    "total_failed": 0,
+    "last_processed_at": "2026-02-05T10:05:00.000000"
+  },
+  "updated_at": "2026-02-05T10:00:00.000000"
+}
+```
 
 ## Directory Structure
 
@@ -256,14 +314,16 @@ Configuration file: `~/.config/task-queue/config.json`
 ~/.config/task-queue/          # Configuration directory
 ├── config.json                  # Main configuration
 └── state/                       # State directory
-    └── queue_state.json        # Task queue state
+    └── queue_state.json        # Task queue state (v2.0)
 
-{project-root}/                  # Your project directory
+{project-workspace}/            # Your project workspace
 └── tasks/
-    ├── task-documents/     # Task specification sources
-    ├── task-archive/            # Completed task specs
-    ├── task-queue/            # Result JSON files (flat)
-    └── task-reports/     # Worker execution reports
+    ├── task-documents/         # Task Source Directory
+    │   ├── task-001.md
+    │   └── task-002.md
+    ├── task-archive/           # Completed task documents
+    └── task-queue/             # Result JSON files (flat)
+        └── task-<id>.json     # Individual task results
 ```
 
 ## Task Document Format
@@ -278,14 +338,12 @@ Components:
 - `task-` - Required prefix
 - `YYYYMMDD` - Date (8 digits)
 - `HHMMSS` - Time (6 digits)
-- `description` - Hyphen-separated description
+- `description` - Hyphen-separated description (optional but recommended)
 
 ### Example
 
 ```markdown
 # Task: Fix authentication timeout
-
-**Status**: pending
 
 ## Task
 The authentication system times out after 30 seconds. Investigate and fix the timeout issue.
@@ -329,20 +387,16 @@ journalctl --user -u task-queue --since today
 ### Log Examples
 
 ```
-Feb 04 20:38:45 task-queue: ============================================================
-Feb 04 20:38:45 task-queue: Task Queue Daemon Starting
-Feb 04 20:38:45 task-queue: Configuration loaded from: ~/.config/task-queue/config.json
-Feb 04 20:38:45 task-queue: Project path: /home/admin/workspaces/datachat
-Feb 04 20:38:45 task-queue: Spec directories: 1
-Feb 04 20:38:45 task-queue:   - main: /home/admin/workspaces/datachat/tasks/task-documents
-Feb 04 20:38:45 task-queue: Processing interval: 10s
-Feb 04 20:38:45 task-queue: Processing loop started (no auto-scanning)
-Feb 04 20:38:55 task-queue: Cycle 1 started at 2026-02-04T20:38:55.110539
-Feb 04 20:38:55 task-queue: 🔧 Processing tasks...
-Feb 04 20:38:55 task-queue:   🔧 Processing 1 tasks
-Feb 04 20:38:55 task-queue: [task-20260204-203800-fixed-test] Task started
-Feb 04 20:39:31 task-queue: [task-20260204-203800-fixed-test] Task completed in 36.3s
-Feb 04 20:39:32 task-queue:   ✅ Processed: 1 completed, 0 failed
+Feb 05 10:00:00 task-queue: ============================================================
+Feb 05 10:00:00 task-queue: Task Queue Daemon Starting
+Feb 05 10:00:00 task-queue: Configuration loaded from: ~/.config/task-queue/config.json
+Feb 05 10:00:00 task-queue: Project Workspace: /home/admin/workspaces/datachat
+Feb 05 10:00:00 task-queue: Task Source Directories: 1
+Feb 05 10:00:00 task-queue:   - main: /home/admin/workspaces/datachat/tasks/task-documents
+Feb 05 10:00:00 task-queue: Watchdog monitoring: 1 sources
+Feb 05 10:00:00 task-queue: Processing loop started (event-driven with watchdog)
+Feb 05 10:00:01 task-queue: Watchdog event: task-001.md in source 'main'
+Feb 05 10:00:01 task-queue: ✅ Auto-loaded task: task-001.md
 ```
 
 ## Workflow Example
@@ -350,40 +404,35 @@ Feb 04 20:39:32 task-queue:   ✅ Processed: 1 completed, 0 failed
 ### Complete Workflow
 
 ```bash
-# 1. Set project path
-task-queue set-project /home/admin/workspaces/myproject
+# 1. Load tasks from a Task Source Directory
+task-queue load --task-source-dir tasks/task-documents --project-workspace /home/admin/workspaces/datachat --source-id main
 
-# 2. Add spec directories
-task-queue add-spec /home/admin/workspaces/myproject/tasks/specs --id main
-task-queue add-spec /home/admin/workspaces/myproject/tasks/experimental --id experimental
+# 2. Check registered Task Source Directories
+task-queue list-sources
 
-# 3. Create task specifications
-# Create files like: task-20260204-120000-feature-x.md
+# 3. Create task documents (watchdog auto-loads them)
+# Create files like: task-20260205-120000-feature-x.md
 
-# 4. Load tasks
-task-queue load
-# Output: 📥 Loaded 2 new tasks
-
-# 5. Check queue
+# 4. Check queue
 task-queue queue
 # Output: 📋 Queue Statistics: Pending: 2
 
-# 6. Process tasks (manual)
+# 5. Process tasks (manual)
 task-queue process
 
-# OR start daemon for automatic processing
+# OR start daemon for automatic processing with watchdog
 systemctl --user start task-queue
 
-# 7. Monitor progress
+# 6. Monitor progress
 journalctl --user -u task-queue -f
 ```
 
-### Manual Processing vs Daemon
+### Watchdog vs Manual Loading
 
 | Approach | When to Use |
 |----------|-------------|
-| **Manual** | One-off processing, testing, debugging |
-| **Daemon** | Continuous processing, production environments |
+| **Watchdog (auto)** | Production, continuous operation |
+| **Manual Load** | One-off processing, testing, specific files |
 
 ## Task Execution
 
@@ -407,49 +456,41 @@ Each task is executed using a two-agent workflow via the `/task-worker` skill:
 | `failed` | Task failed after max attempts |
 | `cancelled` | Task was cancelled |
 
-### Result Files
+### Task Sources
 
-Results are saved in `tasks/task-queue/` (in project root):
-
-```json
-{
-  "task_id": "task-20260204-120000-example",
-  "spec_file": "/path/to/task-document.md",
-  "spec_dir_id": "main",
-  "status": "completed",
-  "started_at": "2026-02-04T12:00:00.000000",
-  "completed_at": "2026-02-04T12:00:58.295574",
-  "duration_seconds": 58.3,
-  "cost_usd": 0.23,
-  "stdout": "Task output...",
-  "attempts": 1,
-  "error": null
-}
-```
+| Source | Description |
+|--------|-------------|
+| `load` | Loaded via manual `load` command |
+| `manual` | Manually added single task |
+| `api` | Added via API (future) |
+| `watchdog` | Auto-loaded by watchdog file event |
+| `reload` | Loaded via `reload` command |
 
 ## Troubleshooting
 
 ### Common Issues
 
-#### Issue: "No project path set"
+#### Issue: "No Project Workspace set"
 
 ```bash
-# Solution: Set project path
-task-queue set-project /path/to/project
+# Solution: Include project-workspace parameter
+task-queue load --task-source-dir <path> --project-workspace /path/to/project --source-id main
 ```
 
-#### Issue: "No spec directories configured"
+#### Issue: "No Task Source Directories configured"
 
 ```bash
-# Solution: Add a spec directory
-task-queue add-spec /path/to/specs --id main
+# Solution: Load command auto-registers the source
+task-queue load --task-source-dir <path> --project-workspace /path/to/project --source-id main
 ```
 
 #### Issue: Daemon shows "No pending tasks"
 
 ```bash
-# Solution: Load tasks first
-task-queue load
+# Solution: Create task documents or reload
+# Watchdog will auto-load new files
+# Or use reload command:
+task-queue reload --task-source-dir main --project-workspace /path/to/project
 ```
 
 #### Issue: Task failed
@@ -489,16 +530,24 @@ task-queue/
 │   ├── atomic.py             # AtomicFileWriter, FileLock
 │   ├── cli.py                # CLI commands
 │   ├── config.py             # ConfigManager
-│   ├── daemon.py             # Daemon service
+│   ├── daemon.py             # Daemon service with watchdog
 │   ├── executor.py           # Claude Agent SDK executor
-│   ├── models.py             # Pydantic models
+│   ├── models.py             # Pydantic models (v2.0)
 │   ├── monitor.py            # Main monitor orchestrator
-│   ├── processor.py          # Task processor
-│   └── scanner.py            # Task specification scanner
+│   ├── processor.py          # Per-source task processor
+│   ├── scanner.py            # Task document scanner
+│   ├── coordinator.py        # Source coordinator (round-robin)
+│   └── watchdog.py           # File system event monitoring
 ├── tests/                    # Unit tests
+│   ├── test_atomic.py
+│   ├── test_config.py
+│   ├── test_executor.py
+│   ├── test_integration.py   # Integration tests
+│   ├── test_models.py
+│   └── test_scanner.py
 ├── README.md                 # This file
 ├── pyproject.toml           # Python package config
-└── task-queue.service     # Systemd service file
+└── task-queue.service       # Systemd service file
 ```
 
 ### Running Tests
@@ -510,9 +559,23 @@ python -m pytest tests/
 # Run with coverage
 python -m pytest --cov=task_queue tests/
 
-# Or use the test script
-./run_tests.sh
+# Run specific test file
+python -m pytest tests/test_integration.py -v
 ```
+
+## Migration from v1.0
+
+### What Changed
+
+1. **State structure** - Migrated from single global queue to per-source queues
+2. **Terminology** - "Spec Directory" → "Task Source Directory", "Project Path" → "Project Workspace"
+3. **CLI Commands** - Removed `set-project`, `add-doc`, `show-project`, `clear-project`
+4. **Load Command** - Now requires both `--task-source-dir` and `--project-workspace` parameters
+5. **New Commands** - Added `reload` and `unload`
+
+### Automatic Migration
+
+Existing v1.0 state files are automatically migrated to v2.0 format on first load. Tasks from the old single queue are distributed to per-source queues based on their `task_doc_dir_id` field.
 
 ## License
 

@@ -149,22 +149,3 @@ class TestConfigManager:
         new_manager = ConfigManager(default_config_manager.config_file)
         assert new_manager.config.project_workspace == str(tmp_path.resolve())
         assert len(new_manager.config.task_source_directories) == 1
-
-    # Backward compatibility tests (old methods still work)
-
-    def test_backward_compat_set_project_path(self, default_config_manager, tmp_path):
-        """Test backward compatibility for set_project_path."""
-        default_config_manager.set_project_path(str(tmp_path))
-        assert default_config_manager.get_project_path() == str(tmp_path.resolve())
-
-    def test_backward_compat_add_task_doc_directory(self, default_config_manager, tmp_path):
-        """Test backward compatibility for add_task_doc_directory."""
-        source_dir = tmp_path / "sources"
-        source_dir.mkdir()
-
-        spec = default_config_manager.add_task_doc_directory(
-            path=str(source_dir),
-            id="main",
-            description="Test sources"
-        )
-        assert spec.id == "main"

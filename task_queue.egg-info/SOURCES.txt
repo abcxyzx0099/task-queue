@@ -4,12 +4,14 @@ task_queue/__init__.py
 task_queue/atomic.py
 task_queue/cli.py
 task_queue/config.py
+task_queue/coordinator.py
 task_queue/daemon.py
 task_queue/executor.py
 task_queue/models.py
 task_queue/monitor.py
 task_queue/processor.py
 task_queue/scanner.py
+task_queue/watchdog.py
 task_queue.egg-info/PKG-INFO
 task_queue.egg-info/SOURCES.txt
 task_queue.egg-info/dependency_links.txt
@@ -17,10 +19,8 @@ task_queue.egg-info/entry_points.txt
 task_queue.egg-info/requires.txt
 task_queue.egg-info/top_level.txt
 tests/test_atomic.py
-tests/test_cli.py
 tests/test_config.py
 tests/test_executor.py
+tests/test_integration.py
 tests/test_models.py
-tests/test_monitor.py
-tests/test_processor.py
 tests/test_scanner.py

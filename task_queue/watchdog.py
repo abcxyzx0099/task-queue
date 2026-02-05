@@ -16,7 +16,7 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent, FileCreatedEvent, FileModifiedEvent
 
-from task_queue.models import TaskSource, DiscoveredTask
+from task_queue.models import DiscoveredTask
 
 
 logger = logging.getLogger(__name__)

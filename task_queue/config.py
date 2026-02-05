@@ -91,21 +91,6 @@ class ConfigManager:
         """Get the current project workspace path."""
         return self.config.project_workspace
 
-    # Backward compatibility aliases (old names)
-
-    def set_project_path(self, path: str) -> None:
-        """Set the project path (deprecated, use set_project_workspace)."""
-        self.set_project_workspace(path)
-
-    def get_project_path(self) -> Optional[str]:
-        """Get the current project path (deprecated, use get_project_workspace)."""
-        return self.get_project_workspace()
-
-    def clear_project_path(self) -> None:
-        """Clear the project workspace path."""
-        self.config.project_workspace = None
-        self.save_config()
-
     # Task Source Directory management
 
     def add_task_source_directory(
@@ -165,24 +150,6 @@ class ConfigManager:
     def get_task_source_directory(self, source_id: str) -> Optional[TaskSourceDirectory]:
         """Get Task Source Directory by ID."""
         return self.config.get_task_source_directory(source_id)
-
-    # Backward compatibility aliases (old names)
-
-    def add_task_doc_directory(self, path: str, id: str, description: str = "") -> TaskSourceDirectory:
-        """Add a task doc directory (deprecated, use add_task_source_directory)."""
-        return self.add_task_source_directory(path, id, description)
-
-    def remove_task_doc_directory(self, doc_id: str) -> bool:
-        """Remove a task doc directory (deprecated, use remove_task_source_directory)."""
-        return self.remove_task_source_directory(doc_id)
-
-    def list_task_doc_directories(self) -> List[TaskSourceDirectory]:
-        """List task doc directories (deprecated, use list_task_source_directories)."""
-        return self.list_task_source_directories()
-
-    def get_task_doc_directory(self, doc_id: str) -> Optional[TaskSourceDirectory]:
-        """Get task doc directory by ID (deprecated, use get_task_source_directory)."""
-        return self.get_task_source_directory(doc_id)
 
     # Settings management
 

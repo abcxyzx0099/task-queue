@@ -36,7 +36,7 @@ class TaskScanner:
             source_dir: Task Source Directory configuration
 
         Returns:
-            List of discovered tasks
+            List of discovered tasks (sorted by filename = chronological order)
         """
         discovered = []
         source_path = Path(source_dir.path)
@@ -50,6 +50,10 @@ class TaskScanner:
             if task:
                 discovered.append(task)
 
+        # Sort by filename (which contains timestamp: task-YYYYMMDD-HHMMSS-*)
+        # This ensures chronological order regardless of filesystem glob order
+        discovered.sort(key=lambda t: t.task_doc_file.name)
+
         return discovered
 
     def scan_task_source_directories(self, source_dirs: List[TaskSourceDirectory]) -> List[DiscoveredTask]:
@@ -60,24 +64,17 @@ class TaskScanner:
             source_dirs: List of Task Source Directory configurations
 
         Returns:
-            List of discovered tasks from all directories
+            List of discovered tasks from all directories (sorted chronologically)
         """
         discovered = []
 
         for source_dir in source_dirs:
             discovered.extend(self.scan_task_source_directory(source_dir))
 
+        # Sort all tasks by filename (chronological order)
+        discovered.sort(key=lambda t: t.task_doc_file.name)
+
         return discovered
-
-    # Backward compatibility aliases
-
-    def scan_task_doc_directory(self, doc_dir: TaskSourceDirectory) -> List[DiscoveredTask]:
-        """Scan a task doc directory (deprecated, use scan_task_source_directory)."""
-        return self.scan_task_source_directory(doc_dir)
-
-    def scan_task_doc_directories(self, doc_dirs: List[TaskSourceDirectory]) -> List[DiscoveredTask]:
-        """Scan task doc directories (deprecated, use scan_task_source_directories)."""
-        return self.scan_task_source_directories(doc_dirs)
 
     def _find_task_files(self, source_dir: Path) -> List[Path]:
         """
@@ -254,12 +251,3 @@ class TaskScanner:
             Hexadecimal hash string
         """
         return self._calculate_hash(filepath)
-        if not self.enable_file_hash:
-            return False
-
-        if known_hash is None:
-            return True
-
-        current_hash = self._calculate_hash(filepath)
-
-        return current_hash != known_hash

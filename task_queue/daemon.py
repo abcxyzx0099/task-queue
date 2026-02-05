@@ -2,19 +2,28 @@
 Background daemon for task processing with watchdog support.
 
 Runs as a systemd user service, processing queued tasks with event-driven file monitoring.
+
+Simplified architecture: No state file - directory structure is the source of truth.
+
+Parallel execution: One worker thread per Task Source Directory.
+- Sequential execution within each source
+- Parallel execution across different sources
 """
 
 import os
 import sys
 import signal
 import logging
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List
 
-from task_queue.monitor import create_queue
+from task_queue.task_runner import TaskRunner
 from task_queue.config import ConfigManager, DEFAULT_CONFIG_FILE
 from task_queue.watchdog import WatchdogManager
-from task_queue.models import TaskSource
+from task_queue.models import TaskSourceDirectory
 
 
 # Configure logging
@@ -33,7 +42,11 @@ class TaskQueueDaemon:
     """
     Background daemon for task processing with watchdog.
 
-    Uses file system events for instant task detection (no polling).
+    Simplified architecture - no state file, directory-based state.
+
+    Parallel execution: One worker thread per Task Source Directory.
+    - Sequential execution within each source
+    - Parallel execution across different sources
     """
 
     def __init__(
@@ -48,12 +61,20 @@ class TaskQueueDaemon:
         """
         self.config_file = config_file or DEFAULT_CONFIG_FILE
 
-        self.monitor = None
+        self.task_runner: TaskRunner = None
         self.running = False
         self.shutdown_requested = False
 
         # Watchdog manager
         self.watchdog_manager: WatchdogManager = None
+
+        # Worker threads (one per Task Source Directory)
+        self._worker_threads: Dict[str, threading.Thread] = {}
+        self._worker_lock = threading.Lock()
+
+        # Per-source event for signaling when tasks are added to that source
+        self._source_events: Dict[str, threading.Event] = {}
+        self._events_lock = threading.Lock()
 
         # Setup signal handlers
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -64,21 +85,19 @@ class TaskQueueDaemon:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self.shutdown_requested = True
+        # Wake up all waiting worker threads
+        with self._events_lock:
+            for event in self._source_events.values():
+                event.set()
 
     def _reload_handler(self, signum, frame):
         """Handle reload signal (SIGHUP)."""
         logger.info("Received SIGHUP, reloading configuration...")
         try:
-            if self.monitor:
-                self.monitor.config_manager.reload()
-
-                # Restart watchdog with new config
-                self._setup_watchdog()
-
-                # Recreate processor with new config
-                self.monitor._processor = None
-
-            logger.info("Configuration reloaded")
+            # For now, just log - full reload would require restarting workers
+            # This is a complex operation that needs careful coordination
+            logger.info("Configuration reload not yet implemented for parallel mode")
+            logger.info("Use 'systemctl --user restart task-queue.service' instead")
         except Exception as e:
             logger.error(f"Failed to reload configuration: {e}")
 
@@ -87,7 +106,8 @@ class TaskQueueDaemon:
         if self.watchdog_manager is None:
             self.watchdog_manager = WatchdogManager(self._on_watchdog_event)
 
-        config = self.monitor.config_manager.config
+        config_manager = ConfigManager(self.config_file)
+        config = config_manager.config
 
         # Get settings
         settings = config.settings
@@ -110,6 +130,12 @@ class TaskQueueDaemon:
             logger.warning("No Task Source Directories configured for watchdog")
             return
 
+        # Create per-source events
+        with self._events_lock:
+            for source_dir in source_dirs:
+                if source_dir.id not in self._source_events:
+                    self._source_events[source_dir.id] = threading.Event()
+
         # Add watcher for each source directory
         for source_dir in source_dirs:
             try:
@@ -131,55 +157,52 @@ class TaskQueueDaemon:
         """
         Handle watchdog file event (task created or modified).
 
+        Signals the specific worker thread for this source.
+
         Args:
             task_doc_file: Path to Task Document file
             source_id: Task Source Directory ID
         """
-        logger.info(f"Watchdog event: {task_doc_file} in source '{source_id}'")
+        logger.info(f"Watchdog event: {Path(task_doc_file).name} in source '{source_id}'")
 
-        try:
-            processor = self.monitor.get_processor()
-
-            if processor:
-                # Load the task
-                result = processor.load_single_task(
-                    task_doc_file=task_doc_file,
-                    source_id=source_id,
-                    source=TaskSource.WATCHDOG
-                )
-
-                if result:
-                    logger.info(f"✅ Auto-loaded task: {Path(task_doc_file).name}")
-                else:
-                    logger.debug(f"Task already exists: {Path(task_doc_file).name}")
-
-        except Exception as e:
-            logger.error(
-                f"Error handling watchdog event for {task_doc_file}: {e}",
-                exc_info=True
-            )
+        # Signal the specific worker for this source
+        with self._events_lock:
+            if source_id in self._source_events:
+                self._source_events[source_id].set()
 
     def start(self) -> None:
         """Start the daemon."""
         logger.info("="*60)
-        logger.info("Task Queue Daemon Starting")
+        logger.info("Task Queue Daemon Starting (Directory-Based State)")
+        logger.info("Parallel execution: One worker per Task Source Directory")
         logger.info("="*60)
 
-        # Create monitor
+        # Load configuration
         try:
-            self.monitor = create_queue(config_file=self.config_file)
+            config_manager = ConfigManager(self.config_file)
+            config = config_manager.config
         except Exception as e:
-            logger.error(f"Failed to create monitor: {e}")
+            logger.error(f"Failed to load configuration: {e}")
             sys.exit(1)
 
         # Log configuration
-        config = self.monitor.config_manager.config
-
         logger.info(f"Configuration loaded from: {self.config_file}")
         logger.info(f"Project Workspace: {config.project_workspace}")
-        logger.info(f"Task Source Directories: {len(config.task_source_directories)}")
 
-        for source_dir in config.task_source_directories:
+        if not config.project_workspace:
+            logger.error("No Project Workspace set")
+            logger.error("Use 'task-queue load' to set up the workspace")
+            sys.exit(1)
+
+        # Create task runner
+        self.task_runner = TaskRunner(
+            project_workspace=config.project_workspace
+        )
+
+        source_dirs = config.task_source_directories
+        logger.info(f"Task Source Directories: {len(source_dirs)}")
+
+        for source_dir in source_dirs:
             logger.info(f"  - {source_dir.id}: {source_dir.path}")
 
         # Setup watchdog
@@ -192,59 +215,113 @@ class TaskQueueDaemon:
 
         # Start processing loop
         self.running = True
-        self._run_loop()
+        self._run_loop(source_dirs)
 
-    def _run_loop(self) -> None:
-        """Main processing loop (event-driven, no polling)."""
-        config = self.monitor.config_manager.config
+    def _run_loop(self, source_dirs: List[TaskSourceDirectory]) -> None:
+        """
+        Main processing loop - spawns worker threads per source directory.
 
-        logger.info("Processing loop started (event-driven with watchdog)")
-        logger.info("Use 'task-queue load' or 'task-queue reload' for manual loading")
+        Each worker thread processes tasks from its source sequentially.
+        Different sources run in parallel.
+
+        Args:
+            source_dirs: List of Task Source Directories to monitor
+        """
+        logger.info("Starting worker threads (parallel execution)")
+        logger.info("Each worker processes its source sequentially")
+
+        # Create and start one worker thread per source directory
+        for source_dir in source_dirs:
+            # Create event for this source
+            with self._events_lock:
+                if source_dir.id not in self._source_events:
+                    self._source_events[source_dir.id] = threading.Event()
+
+            # Create and start worker thread
+            worker = threading.Thread(
+                target=self._worker_loop,
+                args=(source_dir,),
+                name=f"Worker-{source_dir.id}",
+                daemon=True
+            )
+
+            with self._worker_lock:
+                self._worker_threads[source_dir.id] = worker
+
+            worker.start()
+            logger.info(f"Started worker thread for source '{source_dir.id}'")
+
+        # Wait for all workers to complete
+        for source_id, worker in list(self._worker_threads.items()):
+            worker.join(timeout=1.0)
+
+        logger.info("All worker threads stopped")
+
+    def _worker_loop(self, source_dir: TaskSourceDirectory) -> None:
+        """
+        Worker loop for a single Task Source Directory.
+
+        Each worker processes tasks from its own source sequentially.
+        Multiple workers run in parallel for different sources.
+
+        Args:
+            source_dir: The Task Source Directory to process
+        """
+        logger.info(f"[{source_dir.id}] Worker started")
+
+        # Get this source's event
+        with self._events_lock:
+            source_event = self._source_events.get(source_dir.id)
+            if not source_event:
+                logger.error(f"[{source_dir.id}] No event found for source")
+                return
 
         cycle = 0
 
         while self.running and not self.shutdown_requested:
             try:
                 cycle += 1
-                logger.info("-"*60)
-                logger.info(f"Cycle {cycle} started at {datetime.now().isoformat()}")
+                logger.info(f"[{source_dir.id}] Cycle {cycle} started")
 
-                # Process tasks (no auto-loading)
-                self.monitor.process_tasks()
+                # Clear the event before processing
+                source_event.clear()
+
+                # Pick next task from THIS source only
+                task_file = self.task_runner.pick_next_task_from_source(source_dir)
 
                 # Check if shutdown requested
                 if self.shutdown_requested:
                     break
 
-                # Check if there are more tasks to process
-                processor = self.monitor.get_processor()
-                if processor and processor.state.get_total_pending_count() == 0:
-                    logger.info("No more pending tasks, waiting for watchdog events...")
-                    # Wait for watchdog events (no sleep, just wait for signal)
-                    # In a real implementation, we might use a condition variable
-                    # to wait for watchdog events
+                if task_file:
+                    # Execute the task
+                    logger.info(f"[{source_dir.id}] Executing: {task_file.name}")
 
-                logger.info(f"Cycle {cycle} completed")
-                logger.info("-"*60)
+                    result = self.task_runner.execute_task(task_file)
 
-                # Wait briefly before next cycle
-                # This is just a short pause to avoid CPU spinning
-                # Actual task detection happens via watchdog events
-                import time
-                for _ in range(100):  # 10 seconds with interrupt check
-                    if self.shutdown_requested:
-                        break
-                    time.sleep(0.1)
+                    logger.info(f"[{source_dir.id}] Task completed: {result['status']}")
+                    if result.get("error"):
+                        logger.info(f"[{source_dir.id}] Error: {result['error']}")
+                else:
+                    # No pending tasks in this source
+                    logger.info(f"[{source_dir.id}] No pending tasks, waiting for watchdog events...")
+                    # Wait for watchdog event (60 second timeout for keep-alive check)
+                    source_event.wait(timeout=60)
+                    # Event was set (task added) or timeout (keep-alive check)
+
+                logger.info(f"[{source_dir.id}] Cycle {cycle} completed")
+
+                # Brief pause before next cycle
+                time.sleep(0.1)
 
             except Exception as e:
-                logger.error(f"Error in processing cycle: {e}", exc_info=True)
+                logger.error(f"[{source_dir.id}] Error in processing cycle: {e}", exc_info=True)
 
                 # Wait before retry
-                logger.info("Waiting 60s before retry...")
-                import time
-                time.sleep(60)
+                logger.info(f"[{source_dir.id}] Waiting 10s before retry...")
+                source_event.wait(timeout=10)
 
-        self._shutdown()
+        logger.info(f"[{source_dir.id}] Worker stopped")
 
     def _shutdown(self) -> None:
         """Perform graceful shutdown."""
@@ -253,15 +330,25 @@ class TaskQueueDaemon:
         logger.info("="*60)
 
         self.running = False
+        self.shutdown_requested = True
+
+        # Wake up all worker threads
+        with self._events_lock:
+            for event in self._source_events.values():
+                event.set()
+
+        # Wait for all workers to stop
+        logger.info("Waiting for worker threads to stop...")
+        for source_id, worker in list(self._worker_threads.items()):
+            if worker.is_alive():
+                worker.join(timeout=5.0)
+                if worker.is_alive():
+                    logger.warning(f"Worker '{source_id}' did not stop gracefully")
 
         # Stop watchdog
         if self.watchdog_manager:
             logger.info("Stopping watchdog...")
             self.watchdog_manager.stop_all()
-
-        # Stop monitor
-        if self.monitor:
-            self.monitor.stop()
 
         logger.info("Daemon stopped")
 
@@ -271,7 +358,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Task Queue Daemon"
+        description="Task Queue Daemon (Directory-Based State)"
     )
     parser.add_argument(
         "--config",
@@ -300,10 +387,7 @@ def main():
     if args.once:
         # Single cycle mode
         logger.info("Running single cycle...")
-        daemon.monitor = create_queue(
-            config_file=args.config
-        )
-        daemon.monitor.process_tasks()
+        daemon.start()
         logger.info("Single cycle completed")
     else:
         # Normal daemon mode
