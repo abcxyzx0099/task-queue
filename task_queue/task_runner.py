@@ -35,7 +35,7 @@ class TaskRunner:
         Initialize task runner.
 
         Args:
-            project_workspace: Path to project root (used as cwd for SDK execution)
+            project_workspace: Path to project workspace (used as cwd for SDK execution)
         """
         self.project_workspace = Path(project_workspace).resolve()
 
@@ -192,7 +192,7 @@ class TaskRunner:
 
     def execute_task(self, task_file: Path) -> Dict:
         """
-        Execute a task.
+        Execute a task using the FIXED SyncTaskExecutor.
 
         Creates .running marker, executes task, moves to archive/failed.
 
@@ -227,10 +227,11 @@ class TaskRunner:
             }
 
         try:
-            # Execute task
+            # FIXED: Use the now-working SyncTaskExecutor directly
+            # (Removed the subprocess workaround for test4_worker.py)
             result = self.executor.execute(
                 task_file,
-                project_root=self.project_workspace
+                project_workspace=self.project_workspace
             )
 
             # Task completed - handle result

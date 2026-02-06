@@ -17,6 +17,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent, FileCreatedEvent, FileModifiedEvent
 
 from task_queue.models import DiscoveredTask
+from task_queue.file_utils import is_valid_task_id
 
 
 logger = logging.getLogger(__name__)
@@ -166,13 +167,11 @@ class TaskDocumentWatcher(FileSystemEventHandler):
 
         # Validate task ID format
         task_id = filepath.stem
-        if not self._is_valid_task_id(task_id):
+        if not is_valid_task_id(task_id):
             logger.debug(f"Ignoring file with invalid task ID format: {filepath.name}")
             return
 
-        logger.info(
-            f"Task Document {event_type}: {filepath.name} in source '{self.source_dir.id}'"
-        )
+        logger.debug(f"Task document {event_type}: {filepath.name}")
 
         # Trigger load callback
         try:
@@ -185,43 +184,6 @@ class TaskDocumentWatcher(FileSystemEventHandler):
 
         # Periodic cleanup
         self.debounce.cleanup_old_events()
-
-    def _is_valid_task_id(self, task_id: str) -> bool:
-        """
-        Validate task ID format.
-
-        Expected format: task-YYYYMMDD-HHMMSS-description
-
-        Args:
-            task_id: Task ID to validate
-
-        Returns:
-            True if valid format
-        """
-        if not task_id.startswith("task-"):
-            return False
-
-        # Remove "task-" prefix
-        rest = task_id[5:]
-
-        # Check for timestamp pattern (YYYYMMDD-HHMMSS)
-        parts = rest.split("-", 2)
-
-        if len(parts) < 2:
-            return False
-
-        date_part = parts[0]
-        time_part = parts[1]
-
-        # Validate date (8 digits)
-        if len(date_part) != 8 or not date_part.isdigit():
-            return False
-
-        # Validate time (6 digits)
-        if len(time_part) != 6 or not time_part.isdigit():
-            return False
-
-        return True
 
     def start(self) -> None:
         """
@@ -253,9 +215,7 @@ class TaskDocumentWatcher(FileSystemEventHandler):
 
         # Start watching
         self._observer.start()
-        logger.info(
-            f"Started watching Task Source Directory '{self.source_dir.id}': {watch_path}"
-        )
+        logger.info(f"Watching '{self.source_dir.id}': {watch_path}")
 
     def stop(self) -> None:
         """
@@ -266,9 +226,7 @@ class TaskDocumentWatcher(FileSystemEventHandler):
         if self._observer is None:
             return
 
-        logger.info(
-            f"Stopped watching Task Source Directory '{self.source_dir.id}'"
-        )
+        logger.debug(f"Stopped watching '{self.source_dir.id}'")
 
         try:
             self._observer.stop()

@@ -41,6 +41,11 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+# Suppress verbose watchdog library logging
+logging.getLogger("watchdog.observers.inotify_buffer").setLevel(logging.WARNING)
+logging.getLogger("watchdog.observers").setLevel(logging.WARNING)
+
 logger = logging.getLogger("task-queue")
 
 
@@ -150,9 +155,6 @@ class TaskQueueDaemon:
                     debounce_ms=watch_debounce_ms,
                     pattern=pattern
                 )
-                logger.info(
-                    f"Watching Task Source Directory '{source_dir.id}': {source_dir.path}"
-                )
             except Exception as e:
                 logger.error(
                     f"Failed to setup watcher for '{source_dir.id}': {e}",
@@ -169,7 +171,7 @@ class TaskQueueDaemon:
             task_doc_file: Path to Task Document file
             source_id: Task Source Directory ID
         """
-        logger.info(f"Watchdog event: {Path(task_doc_file).name} in source '{source_id}'")
+        logger.debug(f"Watchdog event: {Path(task_doc_file).name} in '{source_id}'")
 
         # Signal the specific worker for this source
         with self._events_lock:
@@ -179,8 +181,7 @@ class TaskQueueDaemon:
     def start(self) -> None:
         """Start the daemon."""
         logger.info("="*60)
-        logger.info("Task Queue Daemon Starting (Directory-Based State)")
-        logger.info("Parallel execution: One worker per Task Source Directory")
+        logger.info("Task Queue Daemon Starting")
         logger.info("="*60)
 
         # Load configuration
@@ -192,12 +193,10 @@ class TaskQueueDaemon:
             sys.exit(1)
 
         # Log configuration
-        logger.info(f"Configuration loaded from: {self.config_file}")
         logger.info(f"Project Workspace: {config.project_workspace}")
 
         if not config.project_workspace:
-            logger.error("No Project Workspace set")
-            logger.error("Use 'task-queue load' to set up the workspace")
+            logger.error("No Project Workspace set. Use 'task-queue load' to set up the workspace")
             sys.exit(1)
 
         # Create task runner
@@ -208,16 +207,13 @@ class TaskQueueDaemon:
         source_dirs = config.task_source_directories
         logger.info(f"Task Source Directories: {len(source_dirs)}")
 
-        for source_dir in source_dirs:
-            logger.info(f"  - {source_dir.id}: {source_dir.path}")
-
         # Setup watchdog
         self._setup_watchdog()
 
         # Log watchdog status
         if self.watchdog_manager:
             watched = self.watchdog_manager.get_watched_sources()
-            logger.info(f"Watchdog monitoring: {len(watched)} sources")
+            logger.info(f"Monitoring {len(watched)} source(s)")
 
         # Start processing loop
         self.running = True
@@ -233,9 +229,6 @@ class TaskQueueDaemon:
         Args:
             source_dirs: List of Task Source Directories to monitor
         """
-        logger.info("Starting worker threads (parallel execution)")
-        logger.info("Each worker processes its source sequentially")
-
         # Create and start one worker thread per source directory
         for source_dir in source_dirs:
             # Create event for this source
@@ -255,7 +248,6 @@ class TaskQueueDaemon:
                 self._worker_threads[source_dir.id] = worker
 
             worker.start()
-            logger.info(f"Started worker thread for source '{source_dir.id}'")
 
         # Wait for all workers to complete
         for source_id, worker in list(self._worker_threads.items()):
@@ -282,13 +274,8 @@ class TaskQueueDaemon:
                 logger.error(f"[{source_dir.id}] No event found for source")
                 return
 
-        cycle = 0
-
         while self.running and not self.shutdown_requested:
             try:
-                cycle += 1
-                logger.info(f"[{source_dir.id}] Cycle {cycle} started")
-
                 # Clear the event before processing
                 source_event.clear()
 
@@ -302,26 +289,19 @@ class TaskQueueDaemon:
                 if task_file:
                     # Execute the task
                     logger.info(f"[{source_dir.id}] Executing: {task_file.name}")
-
                     result = self.task_runner.execute_task(task_file)
-
                     logger.info(f"[{source_dir.id}] Task completed: {result['status']}")
                     if result.get("error"):
-                        logger.info(f"[{source_dir.id}] Error: {result['error']}")
+                        logger.warning(f"[{source_dir.id}] Error: {result['error']}")
                 else:
-                    # No pending tasks in this source
-                    logger.info(f"[{source_dir.id}] No pending tasks, waiting for watchdog events...")
-                    # Wait for watchdog event (keep-alive timeout)
+                    # No pending tasks - wait for watchdog event
                     source_event.wait(timeout=WORKER_KEEPALIVE_TIMEOUT)
-                    # Event was set (task added) or timeout (keep-alive check)
-
-                logger.info(f"[{source_dir.id}] Cycle {cycle} completed")
 
                 # Brief pause before next cycle
                 time.sleep(WORKER_CYCLE_PAUSE)
 
             except Exception as e:
-                logger.error(f"[{source_dir.id}] Error in processing cycle: {e}", exc_info=True)
+                logger.error(f"[{source_dir.id}] Error in worker loop: {e}", exc_info=True)
 
                 # Wait before retry
                 logger.info(f"[{source_dir.id}] Waiting {WORKER_RETRY_DELAY}s before retry...")
