@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from task_queue.models import QueueConfig, TaskSourceDirectory
-from task_queue.atomic import AtomicFileWriter, FileLock
+from task_queue.file_utils import AtomicFileWriter, FileLock
 
 
 # Default configuration paths
@@ -63,7 +63,6 @@ class ConfigManager:
             raise RuntimeError("Could not acquire config lock")
 
         try:
-            self.config.updated_at = self.config.updated_at
             AtomicFileWriter.write_json(self.config_file, self.config.model_dump(), indent=2)
         finally:
             self.lock.release()

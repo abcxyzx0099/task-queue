@@ -9,6 +9,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from task_queue.models import DiscoveredTask, TaskSourceDirectory
+from task_queue.file_utils import is_valid_task_id
 
 
 class TaskScanner:
@@ -113,7 +114,7 @@ class TaskScanner:
         task_id = filepath.stem  # Removes .md suffix
 
         # Validate task_id format (task-YYYYMMDD-HHMMSS-description)
-        if not self._is_valid_task_id(task_id):
+        if not is_valid_task_id(task_id):
             return None
 
         # Get file info
@@ -137,43 +138,6 @@ class TaskScanner:
             file_size=file_size,
             discovered_at=datetime.now().isoformat()
         )
-
-    def _is_valid_task_id(self, task_id: str) -> bool:
-        """
-        Validate task ID format.
-
-        Expected format: task-YYYYMMDD-HHMMSS-description
-
-        Args:
-            task_id: Task ID to validate
-
-        Returns:
-            True if valid format
-        """
-        if not task_id.startswith("task-"):
-            return False
-
-        # Remove "task-" prefix
-        rest = task_id[5:]
-
-        # Check for timestamp pattern (YYYYMMDD-HHMMSS)
-        parts = rest.split("-", 2)
-
-        if len(parts) < 2:
-            return False
-
-        date_part = parts[0]
-        time_part = parts[1]
-
-        # Validate date (8 digits)
-        if len(date_part) != 8 or not date_part.isdigit():
-            return False
-
-        # Validate time (6 digits)
-        if len(time_part) != 6 or not time_part.isdigit():
-            return False
-
-        return True
 
     def _calculate_hash(self, filepath: Path) -> str:
         """

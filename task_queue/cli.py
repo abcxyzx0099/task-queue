@@ -6,52 +6,35 @@ Simplified CLI - no state file operations.
 
 import sys
 import argparse
+import subprocess
 from pathlib import Path
 
 from task_queue.config import ConfigManager, DEFAULT_CONFIG_FILE
 from task_queue.task_runner import TaskRunner
 
 
-def cmd_init(args):
-    """Initialize configuration."""
-    import json
-
-    config_file = Path(args.config) if args.config else DEFAULT_CONFIG_FILE
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-
-    if config_file.exists():
-        print("⚠️  Configuration file already exists")
-        response = input("Overwrite? (y/N): ")
-        if response.lower() != 'y':
-            print("Aborted")
-            return 1
-
-    # Create default config
-    from task_queue.models import QueueConfig
-    config = QueueConfig()
-
-    # Save config
-    import tempfile
-    with tempfile.NamedTemporaryFile(
-        mode='w',
-        dir=config_file.parent,
-        prefix=f".{config_file.name}.",
-        suffix='.tmp',
-        delete=False
-    ) as tmp_file:
-        json.dump(config.model_dump(), tmp_file, indent=2)
-        tmp_file.flush()
-
-    import os
-    os.replace(tmp_file.name, config_file)
-
-    print(f"✅ Configuration created: {config_file}")
-    print()
-    print("Next steps:")
-    print("  1. Set project workspace:")
-    print(f"     task-queue init --config {config_file}")
-    print(f"     task-queue load --task-source-dir tasks/task-documents --project-workspace /path/to/project --source-id main")
-    return 0
+def _restart_daemon() -> bool:
+    """Restart the task-queue daemon service."""
+    try:
+        print("🔄 Restarting daemon to apply changes...")
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", "task-queue.service"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print("✅ Daemon restarted successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  Failed to restart daemon: {e}")
+        if e.stderr:
+            print(f"   Error output: {e.stderr.strip()}")
+        print("   Please restart manually: systemctl --user restart task-queue.service")
+        return False
+    except Exception as e:
+        print(f"⚠️  Failed to restart daemon: {e}")
+        print("   Please restart manually: systemctl --user restart task-queue.service")
+        return False
 
 
 def cmd_status(args):
@@ -74,7 +57,7 @@ def cmd_status(args):
     # Create task runner to get status
     if not config.project_workspace:
         print("\n⚠️  No Project Workspace set")
-        print("Use 'task-queue load' to set up the workspace")
+        print("Use 'task-queue register' to set up the workspace")
         return 0
 
     task_runner = TaskRunner(
@@ -85,7 +68,8 @@ def cmd_status(args):
 
     if not source_dirs:
         print("\n⚠️  No Task Source Directories configured")
-        print("Use 'task-queue load' to add a source directory")
+        print("Use 'task-queue register' to add a source directory")
+        print("Use 'task-queue unregister --source-id <id>' to remove a source directory")
         return 0
 
     print(f"\nTask Source Directories: {len(source_dirs)}")
@@ -113,8 +97,8 @@ def cmd_status(args):
     return 0
 
 
-def cmd_load(args):
-    """Load tasks from source directory."""
+def cmd_register(args):
+    """Register a Task Source Directory for watchdog monitoring."""
     try:
         config_manager = ConfigManager(args.config)
 
@@ -142,10 +126,11 @@ def cmd_load(args):
 
         if task_files:
             print(f"\n📋 Found {len(task_files)} task documents in directory")
-            print("   Daemon will process them automatically")
         else:
             print(f"\n📭 No task documents found yet")
-            print("   Create task-*.md files and the daemon will process them")
+
+        # Restart daemon to apply changes
+        _restart_daemon()
 
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)
@@ -178,8 +163,8 @@ def cmd_list_sources(args):
     return 0
 
 
-def cmd_unload(args):
-    """Remove a Task Source Directory."""
+def cmd_unregister(args):
+    """Remove (unregister) a Task Source Directory."""
     try:
         config_manager = ConfigManager(args.config)
         config = config_manager.config
@@ -193,7 +178,10 @@ def cmd_unload(args):
         # Remove it
         if config.remove_task_source_directory(args.source_id):
             config_manager.save_config()
-            print(f"✅ Removed Task Source Directory '{args.source_id}'")
+            print(f"✅ Unregistered Task Source Directory '{args.source_id}'")
+
+            # Restart daemon to apply changes
+            _restart_daemon()
             return 0
         else:
             print(f"❌ Failed to remove Task Source Directory '{args.source_id}'")
@@ -270,11 +258,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Initialize configuration
-  task-queue init
-
-  # Load a task source directory
-  task-queue load \\
+  # Register a Task Source Directory
+  task-queue register \\
     --task-source-dir tasks/task-documents \\
     --project-workspace /path/to/project \\
     --source-id main
@@ -288,8 +273,8 @@ Examples:
   # List source directories
   task-queue list-sources
 
-  # Unload a source directory
-  task-unload --source-id main
+  # Unregister a source directory
+  task-queue unregister --source-id main
         """
     )
 
@@ -303,45 +288,41 @@ Examples:
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Init command
-    init_parser = subparsers.add_parser("init", help="Initialize configuration")
-    init_parser.set_defaults(func=cmd_init)
-
     # Status command
     status_parser = subparsers.add_parser("status", help="Show system status")
     status_parser.set_defaults(func=cmd_status)
 
-    # Load command
-    load_parser = subparsers.add_parser("load", help="Load Task Source Directory")
-    load_parser.add_argument(
+    # Register command
+    register_parser = subparsers.add_parser("register", help="Register Task Source Directory")
+    register_parser.add_argument(
         "--task-source-dir",
         required=True,
         help="Path to Task Source Directory"
     )
-    load_parser.add_argument(
+    register_parser.add_argument(
         "--project-workspace",
         required=True,
         help="Path to Project Workspace"
     )
-    load_parser.add_argument(
+    register_parser.add_argument(
         "--source-id",
         required=True,
         help="Unique ID for this source"
     )
-    load_parser.set_defaults(func=cmd_load)
+    register_parser.set_defaults(func=cmd_register)
 
     # List sources command
     list_sources_parser = subparsers.add_parser("list-sources", help="List Task Source Directories")
     list_sources_parser.set_defaults(func=cmd_list_sources)
 
-    # Unload command
-    unload_parser = subparsers.add_parser("unload", help="Remove Task Source Directory")
-    unload_parser.add_argument(
+    # Unregister command
+    unregister_parser = subparsers.add_parser("unregister", help="Remove Task Source Directory")
+    unregister_parser.add_argument(
         "--source-id",
         required=True,
         help="Task Source Directory ID to remove"
     )
-    unload_parser.set_defaults(func=cmd_unload)
+    unregister_parser.set_defaults(func=cmd_unregister)
 
     # Run command
     run_parser = subparsers.add_parser("run", help="Run task queue interactively")
