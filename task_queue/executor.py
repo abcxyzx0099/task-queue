@@ -145,27 +145,24 @@ class SyncTaskExecutor:
                 permission_mode="bypassPermissions",
                 setting_sources=["project"],
                 tools={"type": "preset", "preset": "claude_code"},
-                allowed_tools=[
-                    "Task",      # For spawning sub-agents (Implementation Agent, Auditor Agent)
-                    "Skill",     # For invoking skills
-                    "Read",      # For reading files
-                    "Write",     # For writing files
-                    "Edit",      # For editing files
-                    "Bash",      # For running commands
-                    "Glob",      # For file pattern matching
-                    "Grep",      # For searching content
-                ],
                 env={
                     "ANTHROPIC_API_KEY": _ANTHROPIC_API_KEY,
                     "ANTHROPIC_BASE_URL": _ANTHROPIC_BASE_URL
                 },
             )
 
-            # Invoke /task-worker skill with task document path (relative to project workspace)
-            prompt_text = f"""/task-worker
+            # Invoke task-worker by asking agent to READ skill documentation and follow it
+            # This approach was tested and proven to spawn Implementation/Auditor agents
+            # See: temp/test_read_skill_doc.py for test results
+            prompt_text = f"""Read the task-worker skill documentation at: .claude/skills/task-worker/SKILL.md
 
-Execute task at: {relative_task_path}
-"""
+Follow the skill's workflow EXACTLY to execute the task at: {relative_task_path}
+
+IMPORTANT:
+- Read the skill document carefully first
+- Follow ALL steps in the workflow (Safety Checkpoint, Task Report, Implementation Agent, Auditor Agent, Commit)
+- Do NOT skip any steps
+- Do NOT execute the task directly - spawn sub-agents as specified in the skill documentation"""
             q = query(
                 prompt=prompt_text,
                 options=options
