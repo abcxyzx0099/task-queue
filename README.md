@@ -121,11 +121,13 @@ When a task is running, a lock file is created in the task source directory:
 
 | Directory | Purpose |
 |-----------|---------|
-| `{source}/` | Pending task documents (task-*.md) |
+| `{source}/staging/` | Staging area for atomic writes |
+| `{source}/pending/` | Pending task documents (watchdog monitors) |
 | `{source}/.task-XXX.lock` | Lock file for running task |
-| `{source}/../task-archive/` | Completed task documents |
-| `{source}/../task-failed/` | Failed task documents |
-| `{source}/../task-queue/` | JSON result files |
+| `{source}/../completed/` | Completed task documents |
+| `{source}/../failed/` | Failed task documents |
+| `{source}/../results/` | JSON result files |
+| `{source}/../reports/` | Worker execution reports |
 
 ### Safety Features
 
@@ -175,14 +177,15 @@ This creates:
 ```
 tasks/
 ├── ad-hoc/
-│   ├── task-staging/
-│   ├── task-documents/      # Task Source Directory
-│   ├── task-archive/
-│   ├── task-failed/
-│   ├── task-queue/
-│   └── task-reports/
+│   ├── staging/             # Staging area for atomic writes
+│   ├── pending/             # Task Source Directory (watchdog monitors)
+│   ├── completed/           # Completed task documents
+│   ├── failed/              # Failed task documents
+│   ├── results/             # JSON result files
+│   ├── reports/             # Worker execution reports
+│   └── planning/            # Planning documents (planned queue only)
 └── planned/
-    └── (same structure)
+    └── (same structure, plus planning/)
 ```
 
 ### 2. Create a Task Document
@@ -300,13 +303,13 @@ Configuration file: `~/.config/task-queue/config.json`
   "task_source_directories": [
     {
       "id": "ad-hoc",
-      "path": "/home/admin/workspaces/datachat/tasks/ad-hoc/task-documents",
+      "path": "/home/admin/workspaces/datachat/tasks/ad-hoc/pending",
       "description": "Quick, spontaneous tasks from conversation",
       "added_at": "2026-02-07T00:00:00.000000"
     },
     {
       "id": "planned",
-      "path": "/home/admin/workspaces/datachat/tasks/planned/task-documents",
+      "path": "/home/admin/workspaces/datachat/tasks/planned/pending",
       "description": "Organized, sequential tasks from planning docs",
       "added_at": "2026-02-07T00:00:01.000000"
     }
@@ -325,18 +328,18 @@ Configuration file: `~/.config/task-queue/config.json`
 {project-workspace}/            # Your project workspace
 └── tasks/
     ├── ad-hoc/                  # Ad-hoc queue
-    │   ├── task-staging/
-    │   ├── task-documents/      # Task Source Directory (pending)
+    │   ├── staging/             # Staging area for atomic writes
+    │   ├── pending/             # Task Source Directory (watchdog monitors)
     │   │   ├── task-001.md
     │   │   └── .task-002.lock   # Lock file for running task
-    │   ├── task-archive/        # Completed tasks
-    │   ├── task-failed/         # Failed tasks
-    │   ├── task-queue/          # Result JSON files
+    │   ├── completed/           # Completed tasks
+    │   ├── failed/              # Failed tasks
+    │   ├── results/             # Result JSON files
     │   │   ├── task-001.json
     │   │   └── task-002.json
-    │   └── task-reports/        # Worker reports
+    │   └── reports/             # Worker reports
     └── planned/                 # Planned queue
-        └── (same structure)
+        └── (same structure, plus planning/)
 ```
 
 ## Task Document Format
@@ -437,7 +440,7 @@ Each task is executed using a two-agent workflow via the `/task-worker` skill:
                          │      │
                          ▼      ▼
               Delete Lock   Move to
-              + Archive    task-failed/
+              + Archive    failed/
 ```
 
 ## JSON Result Files
@@ -445,8 +448,8 @@ Each task is executed using a two-agent workflow via the `/task-worker` skill:
 After each task execution, a JSON result file is automatically created at:
 
 ```
-{project-workspace}/tasks/ad-hoc/task-queue/{task_id}.json
-{project-workspace}/tasks/planned/task-queue/{task_id}.json
+{project-workspace}/tasks/ad-hoc/results/{task_id}.json
+{project-workspace}/tasks/planned/results/{task_id}.json
 ```
 
 ### Result File Structure
@@ -476,16 +479,16 @@ After each task execution, a JSON result file is automatically created at:
 
 ```bash
 # List all result files
-ls tasks/ad-hoc/task-queue/
+ls tasks/ad-hoc/results/
 
 # View specific result
-cat tasks/ad-hoc/task-queue/task-{id}.json
+cat tasks/ad-hoc/results/task-{id}.json
 
 # View with pretty formatting (requires jq)
-cat tasks/ad-hoc/task-queue/task-{id}.json | jq .
+cat tasks/ad-hoc/results/task-{id}.json | jq .
 
 # Check recent results
-ls -lt tasks/ad-hoc/task-queue/ | head -10
+ls -lt tasks/ad-hoc/results/ | head -10
 ```
 
 ## Troubleshooting
@@ -520,14 +523,14 @@ python -m task_queue.cli sources add /path/to/tasks --id my-queue
 
 ```bash
 # Check lock file
-ls tasks/ad-hoc/task-documents/.task-*.lock
+ls tasks/ad-hoc/pending/.task-*.lock
 
 # Check if process is still running
 cat ~/.config/task-queue/config.json
 
 # If process is dead, daemon will clean up stale locks automatically
 # Or manually remove the lock file
-rm tasks/ad-hoc/task-documents/.task-XXX.lock
+rm tasks/ad-hoc/pending/.task-XXX.lock
 ```
 
 ## Development
