@@ -92,7 +92,7 @@ class TestCLICommands:
                 ],
                 capture_output=True,
                 text=True,
-                cwd="/home/admin/workspaces/task-queue"
+                cwd="/home/admin/workspaces/task-monitor"
             )
 
             # Verify config was created
@@ -361,7 +361,7 @@ class TestCLIIntegration:
                         ],
                         capture_output=True,
                         text=True,
-                        cwd="/home/admin/workspaces/task-queue"
+                        cwd="/home/admin/workspaces/task-monitor"
                     )
 
                     assert "Added" in result.stdout
@@ -375,7 +375,7 @@ class TestCLIIntegration:
                         ],
                         capture_output=True,
                         text=True,
-                        cwd="/home/admin/workspaces/task-queue"
+                        cwd="/home/admin/workspaces/task-monitor"
                     )
 
                     assert "test" in result.stdout
@@ -390,7 +390,7 @@ class TestCLIIntegration:
                         ],
                         capture_output=True,
                         text=True,
-                        cwd="/home/admin/workspaces/task-queue"
+                        cwd="/home/admin/workspaces/task-monitor"
                     )
 
                     assert "Removed" in result.stdout
