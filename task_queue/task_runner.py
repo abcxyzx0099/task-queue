@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from datetime import datetime
 
-from task_queue.models import TaskSourceDirectory
+from task_queue.models import Queue
 from task_queue.executor import SyncTaskExecutor
 
 
@@ -44,52 +44,51 @@ class TaskRunner:
         # Executor for running tasks
         self.executor = SyncTaskExecutor()
 
-    def _get_queue_dirs(self, worker: str) -> tuple[Path, Path]:
+    def _get_queue_dirs(self, queue: Queue) -> tuple[Path, Path]:
         """
-        Get archive and failed directories for a specific worker/queue.
+        Get archive and failed directories for a specific queue.
 
         Args:
-            worker: Worker name (e.g., "ad-hoc", "planned")
+            queue: Queue configuration
 
         Returns:
-            Tuple of (archive_dir, failed_dir)
+            Tuple of (completed_dir, failed_dir)
         """
-        if "ad-hoc" in worker.lower():
-            base = self.project_workspace / "tasks" / "ad-hoc"
-        else:
-            base = self.project_workspace / "tasks" / "planned"
+        # The queue path is: .../tasks/{queue}/
+        # Subdirectories are: pending/, completed/, failed/, results/
+        queue_path = Path(queue.path)
 
         return (
-            base / "completed",
-            base / "failed"
+            queue_path / "completed",
+            queue_path / "failed"
         )
 
     def pick_next_task(
         self,
-        source_dirs: List[TaskSourceDirectory]
+        queues: List[Queue]
     ) -> Optional[Path]:
         """
-        Pick the next task to execute from all source directories.
+        Pick the next task to execute from all queues.
 
         Scans directories, sorts by filename (chronological order),
         and returns the first available task.
 
         Args:
-            source_dirs: List of source directories to scan
+            queues: List of queues to scan
 
         Returns:
             Path to task document, or None if no pending tasks
         """
         all_tasks = []
 
-        # Scan all source directories
-        for source_dir in source_dirs:
-            source_path = Path(source_dir.path)
-            if not source_path.exists():
+        # Scan all queue pending directories
+        for queue in queues:
+            pending_path = Path(queue.path) / "pending"
+            if not pending_path.exists():
                 continue
 
             # Find all task-*.md files
-            for task_file in source_path.glob("task-*.md"):
+            for task_file in pending_path.glob("task-*.md"):
                 if task_file.is_file():
                     all_tasks.append(task_file)
 
@@ -102,29 +101,29 @@ class TaskRunner:
 
         return None
 
-    def pick_next_task_from_source(
+    def pick_next_task_from_queue(
         self,
-        source_dir: TaskSourceDirectory
+        queue: Queue
     ) -> Optional[Path]:
         """
-        Pick the next task to execute from a SINGLE source directory.
+        Pick the next task to execute from a SINGLE queue.
 
-        For parallel execution: each worker thread calls this for its own source.
+        For parallel execution: each worker thread calls this for its own queue.
         Tasks are picked in chronological order (by filename).
 
         Args:
-            source_dir: Single source directory to scan
+            queue: Queue configuration
 
         Returns:
-            Path to task document, or None if no pending tasks in this source
+            Path to task document, or None if no pending tasks in this queue
         """
-        source_path = Path(source_dir.path)
-        if not source_path.exists():
+        pending_path = Path(queue.path) / "pending"
+        if not pending_path.exists():
             return None
 
         # Find all task-*.md files
         all_tasks = []
-        for task_file in source_path.glob("task-*.md"):
+        for task_file in pending_path.glob("task-*.md"):
             if task_file.is_file():
                 all_tasks.append(task_file)
 
@@ -137,7 +136,7 @@ class TaskRunner:
 
         return None
 
-    def execute_task(self, task_file: Path, worker: str = "unknown") -> Dict:
+    def execute_task(self, task_file: Path, queue: Queue) -> Dict:
         """
         Execute a task using the SyncTaskExecutor.
 
@@ -145,7 +144,7 @@ class TaskRunner:
 
         Args:
             task_file: Path to task document
-            worker: Worker name (e.g., "ad-hoc", "planned")
+            queue: Queue configuration
 
         Returns:
             Result dict with status and error info
@@ -153,14 +152,14 @@ class TaskRunner:
         task_id = task_file.stem
 
         # Get per-queue directories
-        archive_dir, failed_dir = self._get_queue_dirs(worker)
+        archive_dir, failed_dir = self._get_queue_dirs(queue)
 
         try:
             # Execute the task
             result = self.executor.execute(
                 task_file,
                 project_workspace=self.project_workspace,
-                worker=worker
+                worker=queue.id
             )
 
             # Task completed - handle result
@@ -214,13 +213,13 @@ class TaskRunner:
 
     def get_status(
         self,
-        source_dirs: List[TaskSourceDirectory]
+        queues: List[Queue]
     ) -> Dict:
         """
         Get current status by scanning directories.
 
         Args:
-            source_dirs: List of source directories to scan
+            queues: List of queues to scan
 
         Returns:
             Status dict with statistics
@@ -229,39 +228,39 @@ class TaskRunner:
             "pending": 0,
             "completed": 0,
             "failed": 0,
-            "sources": {}
+            "queues": {}
         }
 
-        for source_dir in source_dirs:
-            source_path = Path(source_dir.path)
-            if not source_path.exists():
+        for queue in queues:
+            pending_path = Path(queue.path) / "pending"
+            if not pending_path.exists():
                 continue
 
-            source_stats = {
+            queue_stats = {
                 "pending": 0,
                 "completed": 0,
                 "failed": 0
             }
 
             # Count pending tasks
-            for task_file in source_path.glob("task-*.md"):
+            for task_file in pending_path.glob("task-*.md"):
                 if task_file.is_file():
-                    source_stats["pending"] += 1
+                    queue_stats["pending"] += 1
 
-            # Get per-queue directories for this source
-            archive_dir, failed_dir = self._get_queue_dirs(source_dir.id)
+            # Get per-queue directories for this queue
+            archive_dir, failed_dir = self._get_queue_dirs(queue)
 
             # Count completed in archive
             if archive_dir.exists():
-                source_stats["completed"] = len(list(archive_dir.glob("task-*.md")))
+                queue_stats["completed"] = len(list(archive_dir.glob("task-*.md")))
 
             # Count failed
             if failed_dir.exists():
-                source_stats["failed"] = len(list(failed_dir.glob("task-*.md")))
+                queue_stats["failed"] = len(list(failed_dir.glob("task-*.md")))
 
-            stats["sources"][source_dir.id] = source_stats
-            stats["pending"] += source_stats["pending"]
-            stats["completed"] += source_stats["completed"]
-            stats["failed"] += source_stats["failed"]
+            stats["queues"][queue.id] = queue_stats
+            stats["pending"] += queue_stats["pending"]
+            stats["completed"] += queue_stats["completed"]
+            stats["failed"] += queue_stats["failed"]
 
         return stats

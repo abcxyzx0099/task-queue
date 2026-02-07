@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
-from task_queue.models import DiscoveredTask, TaskSourceDirectory
+from task_queue.models import DiscoveredTask, Queue
 from task_queue.file_utils import is_valid_task_id
 
 
 class TaskScanner:
     """
-    Scans Task Source Directories for Task Document files.
+    Scans Queues for Task Document files.
 
     Auto-discovers task-*.md files and tracks them by file hash
     for change detection.
@@ -29,25 +29,25 @@ class TaskScanner:
         """
         self.enable_file_hash = enable_file_hash
 
-    def scan_task_source_directory(self, source_dir: TaskSourceDirectory) -> List[DiscoveredTask]:
+    def scan_queue(self, queue: Queue) -> List[DiscoveredTask]:
         """
-        Scan a single Task Source Directory for Task Documents.
+        Scan a single Queue for Task Documents.
 
         Args:
-            source_dir: Task Source Directory configuration
+            queue: Queue configuration
 
         Returns:
             List of discovered tasks (sorted by filename = chronological order)
         """
         discovered = []
-        source_path = Path(source_dir.path)
+        queue_path = Path(queue.path) / "pending"
 
-        if not source_path.exists():
+        if not queue_path.exists():
             return discovered
 
         # Find all task-*.md files
-        for filepath in self._find_task_files(source_path):
-            task = self._create_discovered_task(filepath, source_dir.id)
+        for filepath in self._find_task_files(queue_path):
+            task = self._create_discovered_task(filepath, queue.id)
             if task:
                 discovered.append(task)
 
@@ -57,20 +57,20 @@ class TaskScanner:
 
         return discovered
 
-    def scan_task_source_directories(self, source_dirs: List[TaskSourceDirectory]) -> List[DiscoveredTask]:
+    def scan_queues(self, queues: List[Queue]) -> List[DiscoveredTask]:
         """
-        Scan multiple Task Source Directories for Task Documents.
+        Scan multiple Queues for Task Documents.
 
         Args:
-            source_dirs: List of Task Source Directory configurations
+            queues: List of Queue configurations
 
         Returns:
-            List of discovered tasks from all directories (sorted chronologically)
+            List of discovered tasks from all queues (sorted chronologically)
         """
         discovered = []
 
-        for source_dir in source_dirs:
-            discovered.extend(self.scan_task_source_directory(source_dir))
+        for queue in queues:
+            discovered.extend(self.scan_queue(queue))
 
         # Sort all tasks by filename (chronological order)
         discovered.sort(key=lambda t: t.task_doc_file.name)
@@ -98,14 +98,14 @@ class TaskScanner:
     def _create_discovered_task(
         self,
         filepath: Path,
-        task_doc_dir_id: str
+        queue_id: str
     ) -> Optional[DiscoveredTask]:
         """
         Create a DiscoveredTask from a file path.
 
         Args:
             filepath: Path to Task Document file
-            task_doc_dir_id: ID of the Task Source Directory
+            queue_id: ID of the Queue
 
         Returns:
             DiscoveredTask or None if invalid
@@ -133,7 +133,7 @@ class TaskScanner:
         return DiscoveredTask(
             task_id=task_id,
             task_doc_file=filepath,
-            task_doc_dir_id=task_doc_dir_id,
+            queue_id=queue_id,
             file_hash=file_hash,
             file_size=file_size,
             discovered_at=datetime.now().isoformat()

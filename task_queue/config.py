@@ -1,24 +1,24 @@
 """
-Configuration management for task queue.
+Configuration management for task-monitor.
 
-Handles loading, saving, and updating queue configuration.
+Handles loading, saving, and updating monitor configuration.
 """
 
 from pathlib import Path
 from typing import Optional, List
 
-from task_queue.models import QueueConfig, TaskSourceDirectory
+from task_queue.models import MonitorConfig, Queue
 from task_queue.file_utils import AtomicFileWriter, FileLock
 
 
 # Default configuration paths
-DEFAULT_CONFIG_DIR = Path.home() / ".config" / "task-queue"
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "task-monitor"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.json"
 
 
 class ConfigManager:
     """
-    Manages task queue configuration.
+    Manages task monitor configuration.
 
     Handles loading configuration from disk, making updates,
     and persisting changes atomically.
@@ -29,7 +29,7 @@ class ConfigManager:
         Initialize configuration manager.
 
         Args:
-            config_file: Path to configuration file. Defaults to ~/.config/task-queue/config.json
+            config_file: Path to configuration file. Defaults to ~/.config/task-monitor/config.json
         """
         self.config_file = Path(config_file) if config_file else DEFAULT_CONFIG_FILE
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +40,7 @@ class ConfigManager:
         # Load or create default config
         self.config = self._load_config()
 
-    def _load_config(self) -> QueueConfig:
+    def _load_config(self) -> MonitorConfig:
         """Load configuration from file or create default."""
         data = AtomicFileWriter.read_json(self.config_file)
 
@@ -48,14 +48,20 @@ class ConfigManager:
             return self._create_default_config()
 
         try:
-            return QueueConfig(**data)
+            # Handle migration from old config format
+            if "task_source_directories" in data:
+                data["queues"] = data.pop("task_source_directories")
+            if "QueueSettings" in str(data.get("settings", {})):
+                # QueueSettings -> MonitorSettings is just a rename
+                pass
+            return MonitorConfig(**data)
         except Exception as e:
             print(f"Warning: Invalid config file, using defaults: {e}")
             return self._create_default_config()
 
-    def _create_default_config(self) -> QueueConfig:
+    def _create_default_config(self) -> MonitorConfig:
         """Create default configuration."""
-        return QueueConfig()
+        return MonitorConfig()
 
     def save_config(self) -> None:
         """Save configuration atomically with locking."""
@@ -90,65 +96,65 @@ class ConfigManager:
         """Get the current project workspace path."""
         return self.config.project_workspace
 
-    # Task Source Directory management
+    # Queue management
 
-    def add_task_source_directory(
+    def add_queue(
         self,
         path: str,
         id: str,
         description: str = ""
-    ) -> TaskSourceDirectory:
+    ) -> Queue:
         """
-        Add a Task Source Directory to monitor.
+        Add a Queue to monitor.
 
         Args:
-            path: Path to Task Source Directory
-            id: Unique identifier for this Task Source Directory
+            path: Path to the Queue directory (contains pending/, completed/, failed/, results/)
+            id: Unique identifier for this Queue
             description: Optional description
 
         Returns:
-            The created TaskSourceDirectory
+            The created Queue
 
         Raises:
             ValueError: If path doesn't exist or ID already exists
         """
-        source_dir = self.config.add_task_source_directory(
+        queue = self.config.add_queue(
             path=path,
             id=id,
             description=description
         )
         self.save_config()
-        return source_dir
+        return queue
 
-    def remove_task_source_directory(self, source_id: str) -> bool:
+    def remove_queue(self, queue_id: str) -> bool:
         """
-        Remove a Task Source Directory from monitoring.
+        Remove a Queue from monitoring.
 
         Args:
-            source_id: Task Source Directory ID to remove
+            queue_id: Queue ID to remove
 
         Returns:
             True if removed, False if not found
         """
-        result = self.config.remove_task_source_directory(source_id)
+        result = self.config.remove_queue(queue_id)
 
         if result:
             self.save_config()
 
         return result
 
-    def list_task_source_directories(self) -> List[TaskSourceDirectory]:
+    def list_queues(self) -> List[Queue]:
         """
-        List configured Task Source Directories.
+        List configured Queues.
 
         Returns:
-            List of Task Source Directories
+            List of Queues
         """
-        return self.config.task_source_directories
+        return self.config.queues
 
-    def get_task_source_directory(self, source_id: str) -> Optional[TaskSourceDirectory]:
-        """Get Task Source Directory by ID."""
-        return self.config.get_task_source_directory(source_id)
+    def get_queue(self, queue_id: str) -> Optional[Queue]:
+        """Get Queue by ID."""
+        return self.config.get_queue(queue_id)
 
     # Settings management
 

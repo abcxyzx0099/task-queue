@@ -16,7 +16,7 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent, FileCreatedEvent, FileModifiedEvent
 
-from task_queue.models import DiscoveredTask
+from task_queue.models import DiscoveredTask, Queue
 from task_queue.file_utils import is_valid_task_id
 
 
@@ -82,14 +82,14 @@ class DebounceTracker:
 
 class TaskDocumentWatcher(FileSystemEventHandler):
     """
-    Watches Task Source Directories for Task Document file changes.
+    Watches Queue pending directories for Task Document file changes.
 
     Automatically loads new Task Documents when files are created or modified.
     """
 
     def __init__(
         self,
-        source_dir: TaskSourceDirectory,
+        queue: Queue,
         load_callback: Callable[[str, str], None],
         debounce_ms: int = 500,
         pattern: str = "task-*.md"
@@ -98,15 +98,15 @@ class TaskDocumentWatcher(FileSystemEventHandler):
         Initialize Task Document watcher.
 
         Args:
-            source_dir: Task Source Directory configuration
+            queue: Queue configuration
             load_callback: Function to call when task is discovered.
-                          Takes (task_doc_file, source_id) as arguments
+                          Takes (task_doc_file, queue_id) as arguments
             debounce_ms: Debounce delay in milliseconds
             pattern: File pattern to match (default: task-*.md)
         """
         super().__init__()
 
-        self.source_dir = source_dir
+        self.queue = queue
         self.load_callback = load_callback
         self.pattern = pattern
 
@@ -119,8 +119,9 @@ class TaskDocumentWatcher(FileSystemEventHandler):
         # Observer
         self._observer: Optional[Observer] = None
 
+        queue_path = Path(queue.path)
         logger.debug(
-            f"TaskDocumentWatcher initialized for {source_dir.id} at {source_dir.path}"
+            f"TaskDocumentWatcher initialized for {queue.id} at {queue_path}"
         )
 
     def on_created(self, event: FileCreatedEvent) -> None:
@@ -187,21 +188,22 @@ class TaskDocumentWatcher(FileSystemEventHandler):
 
     def start(self) -> None:
         """
-        Start watching the Task Source Directory.
+        Start watching the Queue's pending directory.
 
-        Creates and starts a watchdog observer for the configured path.
+        Creates and starts a watchdog observer for queue/pending.
         """
         if self._observer is not None:
             logger.warning(
-                f"Observer already running for source '{self.source_dir.id}'"
+                f"Observer already running for queue '{self.queue.id}'"
             )
             return
 
         # Ensure directory exists
-        watch_path = Path(self.source_dir.path)
-        if not watch_path.exists():
+        queue_path = Path(self.queue.path)
+        pending_path = queue_path / "pending"
+        if not pending_path.exists():
             logger.error(
-                f"Task Source Directory does not exist: {watch_path}"
+                f"Queue pending directory does not exist: {pending_path}"
             )
             return
 
@@ -209,31 +211,31 @@ class TaskDocumentWatcher(FileSystemEventHandler):
         self._observer = Observer()
         self._observer.schedule(
             event_handler=self,
-            path=str(watch_path),
+            path=str(pending_path),
             recursive=False
         )
 
         # Start watching
         self._observer.start()
-        logger.info(f"Watching '{self.source_dir.id}': {watch_path}")
+        logger.info(f"Watching '{self.queue.id}': {pending_path}")
 
     def stop(self) -> None:
         """
-        Stop watching the Task Source Directory.
+        Stop watching the Queue.
 
         Stops and cleans up the watchdog observer.
         """
         if self._observer is None:
             return
 
-        logger.debug(f"Stopped watching '{self.source_dir.id}'")
+        logger.debug(f"Stopped watching '{self.queue.id}'")
 
         try:
             self._observer.stop()
             self._observer.join(timeout=5.0)
         except Exception as e:
             logger.error(
-                f"Error stopping observer for '{self.source_dir.id}': {e}",
+                f"Error stopping observer for '{self.queue.id}': {e}",
                 exc_info=True
             )
         finally:
@@ -253,7 +255,7 @@ class WatchdogManager:
     """
     Manages multiple TaskDocumentWatcher instances.
 
-    One watcher per Task Source Directory for parallel monitoring.
+    One watcher per Queue for parallel monitoring.
     """
 
     def __init__(self, load_callback: Callable[[str, str], None]):
@@ -262,49 +264,49 @@ class WatchdogManager:
 
         Args:
             load_callback: Function to call when task is discovered.
-                          Takes (task_doc_file, source_id) as arguments
+                          Takes (task_doc_file, queue_id) as arguments
         """
         self.load_callback = load_callback
         self._watchers: Dict[str, TaskDocumentWatcher] = {}
 
-    def add_source(
+    def add_queue(
         self,
-        source_dir: TaskSourceDirectory,
+        queue: Queue,
         debounce_ms: int = 500,
         pattern: str = "task-*.md"
     ) -> None:
         """
-        Add a Task Source Directory to watch.
+        Add a Queue to watch.
 
         Args:
-            source_dir: Task Source Directory configuration
+            queue: Queue configuration
             debounce_ms: Debounce delay in milliseconds
             pattern: File pattern to watch
         """
-        if source_dir.id in self._watchers:
+        if queue.id in self._watchers:
             logger.warning(
-                f"Task Source Directory '{source_dir.id}' is already being watched"
+                f"Queue '{queue.id}' is already being watched"
             )
             return
 
         watcher = TaskDocumentWatcher(
-            source_dir=source_dir,
+            queue=queue,
             load_callback=self.load_callback,
             debounce_ms=debounce_ms,
             pattern=pattern
         )
 
-        self._watchers[source_dir.id] = watcher
+        self._watchers[queue.id] = watcher
         watcher.start()
 
-    def remove_source(self, source_id: str) -> None:
+    def remove_queue(self, queue_id: str) -> None:
         """
-        Remove a Task Source Directory from watching.
+        Remove a Queue from watching.
 
         Args:
-            source_id: Source ID to stop watching
+            queue_id: Queue ID to stop watching
         """
-        watcher = self._watchers.pop(source_id, None)
+        watcher = self._watchers.pop(queue_id, None)
 
         if watcher:
             watcher.stop()
@@ -320,33 +322,33 @@ class WatchdogManager:
         for source_id in list(self._watchers.keys()):
             self.remove_source(source_id)
 
-    def is_watching(self, source_id: str) -> bool:
+    def is_watching(self, queue_id: str) -> bool:
         """
-        Check if a source is currently being watched.
+        Check if a queue is currently being watched.
 
         Args:
-            source_id: Source ID to check
+            queue_id: Queue ID to check
 
         Returns:
-            True if source is being watched
+            True if queue is being watched
         """
-        watcher = self._watchers.get(source_id)
+        watcher = self._watchers.get(queue_id)
         return watcher is not None and watcher.is_running()
 
-    def get_watched_sources(self) -> Set[str]:
+    def get_watched_queues(self) -> Set[str]:
         """
-        Get list of sources currently being watched.
+        Get list of queues currently being watched.
 
         Returns:
-            Set of source IDs
+            Set of queue IDs
         """
         return {
-            source_id
-            for source_id, watcher in self._watchers.items()
+            queue_id
+            for queue_id, watcher in self._watchers.items()
             if watcher.is_running()
         }
 
 
 # Import at end to avoid circular dependency
 if TYPE_CHECKING:
-    from task_queue.models import TaskSourceDirectory
+    from task_queue.models import Queue

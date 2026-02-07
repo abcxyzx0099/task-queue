@@ -150,19 +150,18 @@ class ExecutionResult:
         # Remove None values
         return {k: v for k, v in data.items() if v is not None}
 
-    def save_to_file(self, project_workspace: Path) -> Path:
+    def save_to_file(self, project_workspace: Path, worker: str = "ad-hoc") -> Path:
         """
-        Save result as JSON file to tasks/ad-hoc/results/ or tasks/planned/results/{task_id}.json
+        Save result as JSON file to tasks/{worker}/results/{task_id}.json
 
         Args:
             project_workspace: Path to project workspace
+            worker: Worker name (e.g., "ad-hoc", "planned")
 
         Returns:
             Path to saved result file
         """
-        # For backward compatibility, save to flat task-queue directory
-        # The actual queue selection happens based on where the result file is placed
-        result_dir = project_workspace / "tasks" / "results"
+        result_dir = project_workspace / "tasks" / worker / "results"
         result_dir.mkdir(parents=True, exist_ok=True)
 
         result_file = result_dir / f"{self.task_id}.json"
@@ -321,7 +320,7 @@ IMPORTANT:
 
                             # Save result JSON file
                             try:
-                                result_path = result.save_to_file(self.project_workspace)
+                                result_path = result.save_to_file(self.project_workspace, worker)
                                 logger.info(f"[{task_id}] Result saved to: {result_path}")
                             except Exception as e:
                                 logger.warning(f"[{task_id}] Failed to save result file: {e}")
@@ -351,7 +350,7 @@ IMPORTANT:
 
                             # Save result JSON file even for errors
                             try:
-                                result_path = result.save_to_file(self.project_workspace)
+                                result_path = result.save_to_file(self.project_workspace, worker)
                                 logger.info(f"[{task_id}] Error result saved to: {result_path}")
                             except Exception as save_err:
                                 logger.warning(f"[{task_id}] Failed to save error result: {save_err}")
@@ -383,7 +382,7 @@ IMPORTANT:
                     pass
 
                 try:
-                    result.save_to_file(self.project_workspace)
+                    result.save_to_file(self.project_workspace, worker)
                 except Exception:
                     pass
 
@@ -403,7 +402,7 @@ IMPORTANT:
                     pass
 
                 try:
-                    result.save_to_file(self.project_workspace)
+                    result.save_to_file(self.project_workspace, worker)
                 except Exception:
                     pass
 

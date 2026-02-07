@@ -1,21 +1,22 @@
 """
-Task Queue - Directory-based state system with watchdog support.
+Task Monitor - Directory-based state system with watchdog support.
 
-Scans Task Source Directories and executes tasks via Claude Agent SDK.
+Monitors Queues and executes tasks via Claude Agent SDK.
 
 Architecture: No state file - directory structure is the source of truth.
-- tasks/task-documents/  - pending tasks
-- tasks/task-archive/    - completed tasks
-- tasks/task-failed/    - failed tasks
+- tasks/{queue}/pending/   - pending tasks
+- tasks/{queue}/completed/ - completed tasks
+- tasks/{queue}/failed/    - failed tasks
+- tasks/{queue}/results/   - result JSON files
 """
 
 __version__ = "2.0.0"
 __author__ = "DataChat Project"
 
 from task_queue.models import (
-    TaskSourceDirectory,
-    QueueConfig,
-    QueueSettings,
+    Queue,
+    MonitorConfig,
+    MonitorSettings,
     DiscoveredTask,
 )
 
@@ -27,9 +28,9 @@ from task_queue.watchdog import WatchdogManager, TaskDocumentWatcher
 
 __all__ = [
     # Models
-    "TaskSourceDirectory",
-    "QueueConfig",
-    "QueueSettings",
+    "Queue",
+    "MonitorConfig",
+    "MonitorSettings",
     "DiscoveredTask",
     # Config
     "ConfigManager",
